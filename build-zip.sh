@@ -31,8 +31,12 @@ rm -f "$out"
 
 # --prefix puts everything under the single top-level folder that WordPress
 # requires; a zip of loose files is not an installable plugin.
+# What ships: the plugin, its classes, the brief the settings screen reads, the
+# README, and the licence. What does not: the test harness, the packaging script
+# and the repo's ignore file.
 git archive --format=zip --prefix="${slug}/" -o "$out" HEAD -- . \
 	':(exclude)tests' \
+	':(exclude)build-zip.sh' \
 	':(exclude).gitignore'
 
 echo "Built ${out} (version ${version})"
