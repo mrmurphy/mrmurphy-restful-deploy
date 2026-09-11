@@ -371,15 +371,24 @@ the capped log and evict real evidence. They are counted per hour instead and re
 
 ## Using it from an agent
 
-`AGENT-INSTRUCTIONS.md` is written for exactly that: a short block to paste into an agent's
-context, followed by the endpoint reference, copy-paste recipes, ZIP rules and a table of
-every error code with the correct response to it. It ends with the house rules (dry-run
-first, never overwrite unasked, one mutation at a time, stop and ask when the endpoints are
-closed) and the things an agent must never do.
+**Settings → Restful Deploy** carries the whole brief, in two read-only fields with Copy
+buttons — no trip to the repository:
+
+- **Start here: paste this into your agent** — the short block, with this site's base URL and
+  the reading user's username already filled in. Your Application Password is the one thing it
+  deliberately leaves blank.
+- **The full brief** — the same text as `AGENT-INSTRUCTIONS.md`: every route, copy-paste curl
+  recipes, ZIP rules, a table of error codes with what to do about each, the house rules
+  (dry-run first, never overwrite unasked, one mutation at a time, stop and ask when
+  deployments are off) and what an agent must never do.
+
+That page reads the file shipped inside the plugin, so the page and the file cannot drift
+apart. The file is still in the repository and in the zip for anyone who would rather read it
+there.
 
 The short version of what an agent needs: the base URL, an Application Password, and
-`GET /inventory` first — that response says whether the door is open (`gates.enabled`,
-`gates.controlled_by`, `gates.armed_until`) and what is already installed.
+`GET /inventory` first — the response says whether deployments are on (`gates.enabled`,
+`gates.controlled_by`) and what is already installed.
 
 ## Tests
 
@@ -392,6 +401,7 @@ python3 tests/make_fixtures.py                                    # rebuild fixt
 PKG_PHASE=default     wp eval-file tests/run-tests.php            # 6 — out of the box it is ON
 PKG_PHASE=off         wp eval-file tests/run-tests.php            # 10 — the off switch, both ways
 PKG_PHASE=limits      wp eval-file tests/run-tests.php            # 10 — the throttle, measured
+PKG_PHASE=admin       wp eval-file tests/run-tests.php            # 26 — the screen and the brief
 PKG_PHASE=forced_off  wp eval-file tests/run-tests.php            # 7 — the kill switch wins
 PKG_PHASE=forced_on   wp eval-file tests/run-tests.php            # 5 — the constant can pin it on
 PKG_PHASE=enabled     wp eval-file tests/run-tests.php            # 134 — the whole API

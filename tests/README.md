@@ -21,7 +21,10 @@ PKG_PHASE=off wp eval-file run-tests.php
 # 3. the throttle: what costs budget, what does not, and the 429 at the cap
 PKG_PHASE=limits wp eval-file run-tests.php
 
-# 4. the full install / activate / overwrite / uninstall / security flow
+# 4. the admin screen: menu, capability, and the copy-able agent brief
+PKG_PHASE=admin wp eval-file run-tests.php
+
+# 5. the full install / activate / overwrite / uninstall / security flow
 PKG_PHASE=enabled wp eval-file run-tests.php
 
 # The two wp-config.php phases need the constant fixture in mu-plugins first.
@@ -44,7 +47,7 @@ rm "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
 ```
 
 Expected, in that order: `6 passed, 0 failed`, `10 passed, 0 failed`, `10 passed, 0 failed`,
-`134 passed, 0 failed`, `7 passed, 0 failed`, `5 passed, 0 failed`.
+`26 passed, 0 failed`, `134 passed, 0 failed`, `7 passed, 0 failed`, `5 passed, 0 failed`.
 
 Every phase clears its fixture plugin/theme and the plugin's options at the start, so runs are
 repeatable and order-independent; the `enabled` phase clears them again at the end and asserts
@@ -82,6 +85,11 @@ per-hour throttle counters wiped, so runs are repeatable and order-independent.
   exactly one, and the request past the cap gets `429 mrmurphy_restful_deploy_rate_limited`
   quoting the cap — while reads still answer. The counter is read with SQL, because the
   throttle writes it with SQL and `get_option()` would return a cached miss.
+- The admin screen (phase `admin`): registered under Settings with `manage_options` (and not
+  for a subscriber), the copy script enqueued on that screen and no other, the screen renders
+  in both states with no PHP warnings, and the agent brief is present as two read-only
+  textareas with this site's URL and username filled in, the password left as a placeholder,
+  no credential rendered, and nothing pointing at the repository.
 - Gate order: master switch → login → HTTPS → application password → capability.
 - Capability denial (`rest_cannot_manage_plugins`) and the SSL gate.
 - Archive validation: flat zips, `../` traversal entries, non-package zips,

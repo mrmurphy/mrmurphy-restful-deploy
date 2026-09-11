@@ -24,24 +24,47 @@ final class MRMurphy_Restful_Deploy_Admin {
 	/** @var string Nonce action for the on/off form. */
 	const NONCE = 'mrmurphy_restful_deploy_save';
 
+	/** @var string Hook suffix of this screen, so the script loads only here. */
+	private $hook = '';
+
 	/**
 	 * Hook the screen.
 	 */
 	public function __construct() {
 		add_action( 'admin_menu', array( $this, 'add_page' ) );
 		add_action( 'admin_post_mrmurphy_restful_deploy_save', array( $this, 'handle_save' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue' ) );
 	}
 
 	/**
 	 * Register the settings page.
 	 */
 	public function add_page() {
-		add_options_page(
+		$this->hook = (string) add_options_page(
 			__( 'MrMurphy Restful Deploy', 'mrmurphy-restful-deploy' ),
 			__( 'Restful Deploy', 'mrmurphy-restful-deploy' ),
 			'manage_options',
 			self::PAGE,
 			array( $this, 'render' )
+		);
+	}
+
+	/**
+	 * The copy buttons, on this screen only.
+	 *
+	 * @param string $hook Current admin page.
+	 */
+	public function enqueue( $hook ) {
+		if ( (string) $hook !== $this->hook ) {
+			return;
+		}
+
+		wp_enqueue_script(
+			'mrmurphy-restful-deploy-admin',
+			plugins_url( 'assets/admin-copy.js', MRMURPHY_RESTFUL_DEPLOY_FILE ),
+			array(),
+			MRMURPHY_RESTFUL_DEPLOY_VERSION,
+			true
 		);
 	}
 
@@ -105,6 +128,152 @@ final class MRMurphy_Restful_Deploy_Admin {
 			default:
 				return __( 'Default — on, and never switched off', 'mrmurphy-restful-deploy' );
 		}
+	}
+
+	/**
+	 * The route table. One list, used by the Endpoints section and by the
+	 * fallback brief, so the page and the brief cannot disagree.
+	 *
+	 * @return array[]
+	 */
+	private function routes() {
+		return array(
+			array( 'GET', '/inventory', __( 'Installed plugins and themes, plus the gates above', 'mrmurphy-restful-deploy' ) ),
+			array( 'GET', '/log', __( 'Audit log and refusal counters', 'mrmurphy-restful-deploy' ) ),
+			array( 'POST', '/plugins', __( 'Install a plugin ZIP, optionally activate it', 'mrmurphy-restful-deploy' ) ),
+			array( 'POST', '/plugins/activate', __( 'Activate an installed plugin', 'mrmurphy-restful-deploy' ) ),
+			array( 'POST', '/plugins/deactivate', __( 'Deactivate an installed plugin', 'mrmurphy-restful-deploy' ) ),
+			array( 'DELETE', '/plugins', __( 'Uninstall a plugin', 'mrmurphy-restful-deploy' ) ),
+			array( 'POST', '/themes', __( 'Install a theme ZIP, optionally activate it', 'mrmurphy-restful-deploy' ) ),
+			array( 'POST', '/themes/activate', __( 'Switch the active theme', 'mrmurphy-restful-deploy' ) ),
+			array( 'DELETE', '/themes', __( 'Uninstall a theme', 'mrmurphy-restful-deploy' ) ),
+		);
+	}
+
+	/**
+	 * The agent brief as shipped: read straight from the file inside this plugin
+	 * that goes out in the zip and sits in the repository.
+	 *
+	 * Reading the shipped file rather than keeping a second copy in PHP means the
+	 * text on this screen cannot drift from the text on GitHub.
+	 *
+	 * @return string
+	 */
+	private function agent_instructions() {
+		$file = MRMURPHY_RESTFUL_DEPLOY_DIR . 'AGENT-INSTRUCTIONS.md';
+
+		if ( is_readable( $file ) ) {
+			$text = file_get_contents( $file );
+
+			if ( is_string( $text ) && '' !== trim( $text ) ) {
+				return $text;
+			}
+		}
+
+		return $this->fallback_brief();
+	}
+
+	/**
+	 * The short block from inside the brief — the part meant to be pasted into an
+	 * agent's context, rather than the whole reference.
+	 *
+	 * @return string
+	 */
+	private function paste_block() {
+		$text = $this->agent_instructions();
+
+		if ( preg_match( '/^```text$\n(.*?)\n^```$/ms', $text, $matches ) ) {
+			$text = $matches[1];
+		}
+
+		return $text;
+	}
+
+	/**
+	 * Fill in what this site can fill in: its own base URL, and the username of
+	 * whoever is reading the page.
+	 *
+	 * Credentials are never filled in. The page has no access to an Application
+	 * Password, and it should not be printing one into HTML if it did.
+	 *
+	 * @param string $text Brief text.
+	 * @return string
+	 */
+	private function personalize( $text ) {
+		$text = str_replace(
+			array(
+				'https://<SITE>/wp-json/' . MRMURPHY_RESTFUL_DEPLOY_NAMESPACE,
+				'https://<SITE>',
+			),
+			array(
+				rest_url( MRMURPHY_RESTFUL_DEPLOY_NAMESPACE ),
+				untrailingslashit( home_url() ),
+			),
+			$text
+		);
+
+		$user = wp_get_current_user();
+
+		if ( $user instanceof WP_User && $user->exists() ) {
+			$text = str_replace( '<WORDPRESS USER>', $user->user_login, $text );
+		}
+
+		return $text;
+	}
+
+	/**
+	 * If the shipped file is missing, say something useful rather than nothing.
+	 * Built from the same route list the page shows.
+	 *
+	 * @return string
+	 */
+	private function fallback_brief() {
+		$lines = array(
+			'You can deploy and manage plugins and themes on this WordPress site through the',
+			'"MrMurphy Restful Deploy" REST API, without SFTP or SSH.',
+			'',
+			'Base URL : ' . rest_url( MRMURPHY_RESTFUL_DEPLOY_NAMESPACE ),
+			'Auth     : HTTP Basic, with an administrator\'s Application Password',
+			'Start    : GET /inventory — it reports the installed packages and the gates.',
+			'',
+			'Routes:',
+		);
+
+		foreach ( $this->routes() as $route ) {
+			$lines[] = sprintf( '  %-6s %s — %s', $route[0], $route[1], $route[2] );
+		}
+
+		$lines[] = '';
+		$lines[] = 'If you get 403 mrmurphy_restful_deploy_disabled, deployments are switched off';
+		$lines[] = 'and you cannot switch them on yourself: ask the human.';
+		$lines[] = '';
+		$lines[] = '(AGENT-INSTRUCTIONS.md is missing from this install, so this is the short form.)';
+
+		return implode( "\n", $lines );
+	}
+
+	/**
+	 * A read-only field with a Copy button, so the brief can be pasted into an
+	 * agent without leaving the admin.
+	 *
+	 * @param string $id    Field id.
+	 * @param string $label Heading above the field.
+	 * @param string $text  Contents.
+	 * @param int    $rows  Visible rows.
+	 */
+	private function copy_field( $id, $label, $text, $rows ) {
+		?>
+		<h3><?php echo esc_html( $label ); ?></h3>
+		<p>
+			<button type="button" class="button" data-mrmurphy-copy="<?php echo esc_attr( $id ); ?>"
+				data-label="<?php esc_attr_e( 'Copy', 'mrmurphy-restful-deploy' ); ?>"
+				data-copied="<?php esc_attr_e( 'Copied', 'mrmurphy-restful-deploy' ); ?>"
+				data-failed="<?php esc_attr_e( 'Select it and press Ctrl/Cmd+C', 'mrmurphy-restful-deploy' ); ?>">
+				<?php esc_html_e( 'Copy', 'mrmurphy-restful-deploy' ); ?>
+			</button>
+		</p>
+		<textarea id="<?php echo esc_attr( $id ); ?>" class="large-text code" rows="<?php echo (int) $rows; ?>" readonly="readonly" spellcheck="false" wrap="off" style="max-width:60em"><?php echo esc_textarea( $text ); ?></textarea>
+		<?php
 	}
 
 	/**
@@ -265,19 +434,7 @@ final class MRMurphy_Restful_Deploy_Admin {
 				</thead>
 				<tbody>
 					<?php
-					$routes = array(
-						array( 'GET', '/inventory', __( 'Installed plugins and themes, plus the gates above', 'mrmurphy-restful-deploy' ) ),
-						array( 'GET', '/log', __( 'Audit log and refusal counters', 'mrmurphy-restful-deploy' ) ),
-						array( 'POST', '/plugins', __( 'Install a plugin ZIP, optionally activate it', 'mrmurphy-restful-deploy' ) ),
-						array( 'POST', '/plugins/activate', __( 'Activate an installed plugin', 'mrmurphy-restful-deploy' ) ),
-						array( 'POST', '/plugins/deactivate', __( 'Deactivate an installed plugin', 'mrmurphy-restful-deploy' ) ),
-						array( 'DELETE', '/plugins', __( 'Uninstall a plugin', 'mrmurphy-restful-deploy' ) ),
-						array( 'POST', '/themes', __( 'Install a theme ZIP, optionally activate it', 'mrmurphy-restful-deploy' ) ),
-						array( 'POST', '/themes/activate', __( 'Switch the active theme', 'mrmurphy-restful-deploy' ) ),
-						array( 'DELETE', '/themes', __( 'Uninstall a theme', 'mrmurphy-restful-deploy' ) ),
-					);
-
-					foreach ( $routes as $route ) {
+					foreach ( $this->routes() as $route ) {
 						printf(
 							'<tr><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>',
 							esc_html( $route[0] ),
@@ -338,15 +495,37 @@ final class MRMurphy_Restful_Deploy_Admin {
 				</p>
 			<?php endif; ?>
 
-			<h2><?php esc_html_e( 'Using it from an agent', 'mrmurphy-restful-deploy' ); ?></h2>
+			<h2><?php esc_html_e( 'Instructions for an agent', 'mrmurphy-restful-deploy' ); ?></h2>
 			<p style="max-width:60em">
+				<?php esc_html_e( 'Everything an agent needs to use this API: how to authenticate, every route, copy-paste examples, what each error code means, and what it must never do. Copy it into the agent’s context — none of it is secret.', 'mrmurphy-restful-deploy' ); ?>
+			</p>
+			<?php
+			$this->copy_field(
+				'mrmurphy-paste-block',
+				__( 'Start here: paste this into your agent', 'mrmurphy-restful-deploy' ),
+				$this->personalize( $this->paste_block() ),
+				22
+			);
+			?>
+			<p class="description" style="max-width:60em">
 				<?php
 				printf(
-					/* translators: %s: route path. */
-					esc_html__( 'Give your agent the base URL above, an Application Password, and the instructions file that ships with the plugin (AGENT-INSTRUCTIONS.md in the repository). It should start with a GET %s so it can see the gates and what is already installed.', 'mrmurphy-restful-deploy' ),
-					'<code>' . esc_html( '/inventory' ) . '</code>'
+					/* translators: %s: link to the Application Passwords screen. */
+					esc_html__( 'The base URL and your username are filled in for you. Put your own Application Password where the placeholder is: create or revoke one under %s. It is the only secret in the brief, and this page never stores or shows one.', 'mrmurphy-restful-deploy' ),
+					'<a href="' . esc_url( admin_url( 'profile.php#application-passwords-section' ) ) . '">' . esc_html__( 'Users → Profile → Application Passwords', 'mrmurphy-restful-deploy' ) . '</a>'
 				);
 				?>
+			</p>
+			<?php
+			$this->copy_field(
+				'mrmurphy-full-brief',
+				__( 'The full brief', 'mrmurphy-restful-deploy' ),
+				$this->personalize( $this->agent_instructions() ),
+				14
+			);
+			?>
+			<p class="description" style="max-width:60em">
+				<?php esc_html_e( 'Read from AGENT-INSTRUCTIONS.md inside this plugin, with this site’s URL filled in — the same file that ships in the zip and lives in the repository, so this page cannot show you a stale copy.', 'mrmurphy-restful-deploy' ); ?>
 			</p>
 			<p style="max-width:60em">
 				<?php esc_html_e( 'There is no route that switches these endpoints on or off — deliberate, so a leaked Application Password cannot close or reopen them behind your back.', 'mrmurphy-restful-deploy' ); ?>

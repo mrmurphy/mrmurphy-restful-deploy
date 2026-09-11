@@ -2,7 +2,7 @@
 /**
  * In-process end-to-end test for mrmurphy-restful-deploy.
  *
- * Run: PKG_PHASE=default|off|limits|forced_off|forced_on|enabled wp eval-file run-tests.php
+ * Run: PKG_PHASE=default|off|limits|admin|forced_off|forced_on|enabled wp eval-file run-tests.php
  *
  * Drives the real REST dispatch path (rest_do_request), the real capability
  * gates, the real upgrader and the real filesystem. The only thing relaxed is
@@ -323,6 +323,98 @@ if ( 'limits' === $phase ) {
 	// Reads still work with the budget spent, so an agent can always look around.
 	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
 	ok( 'reads still answer 200 at the cap', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
+
+	tally();
+	return;
+}
+
+if ( 'admin' === $phase ) {
+	require_once ABSPATH . 'wp-admin/includes/screen.php';
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+	$admins   = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	$admin_id = $admins ? (int) $admins[0] : 1;
+	wp_set_current_user( $admin_id );
+
+	$page = new MRMurphy_Restful_Deploy_Admin();
+	$page->add_page();
+
+	$hook = get_plugin_page_hookname( MRMurphy_Restful_Deploy_Admin::PAGE, 'options-general.php' );
+	set_current_screen( $hook );
+
+	// The script must load here and nowhere else.
+	$page->enqueue( 'edit.php' );
+	ok( 'the copy script does not load on other screens', ! wp_script_is( 'mrmurphy-restful-deploy-admin', 'enqueued' ) );
+
+	$page->enqueue( $hook );
+	ok( 'the copy script loads on this screen', wp_script_is( 'mrmurphy-restful-deploy-admin', 'enqueued' ) );
+
+	$registered = wp_scripts()->registered['mrmurphy-restful-deploy-admin'];
+	ok( 'the script points at the file that ships', false !== strpos( (string) $registered->src, 'assets/admin-copy.js' ), (string) $registered->src );
+	ok( 'the script file exists on disk', file_exists( MRMURPHY_RESTFUL_DEPLOY_DIR . 'assets/admin-copy.js' ) );
+
+	// Registration: the right menu, the right capability.
+	global $submenu;
+	$capability = '';
+
+	foreach ( (array) $submenu['options-general.php'] as $row ) {
+		if ( isset( $row[2] ) && MRMurphy_Restful_Deploy_Admin::PAGE === $row[2] ) {
+			$capability = (string) $row[1];
+		}
+	}
+
+	ok( 'the screen is registered under Settings with manage_options', 'manage_options' === $capability, $capability );
+	ok( 'an administrator has that capability', user_can( $admin_id, 'manage_options' ) );
+
+	$subscribers = get_users( array( 'role' => 'subscriber', 'number' => 1, 'fields' => 'ID' ) );
+
+	if ( $subscribers ) {
+		ok( 'a subscriber does not, so the menu is not there for them', ! user_can( (int) $subscribers[0], 'manage_options' ) );
+	} else {
+		ok( 'no subscriber account to test the capability against', true );
+	}
+
+	// The screen itself.
+	ob_start();
+	$page->render();
+	$html = ob_get_clean();
+
+	ok( 'the screen renders', strlen( $html ) > 3000, strlen( $html ) . ' bytes' );
+	ok( 'no PHP warnings in the rendered screen', 0 === substr_count( $html, 'Warning' ) );
+	ok( 'it shows the on/off state', false !== strpos( $html, '>ON<' ) || false !== strpos( $html, '>OFF<' ) );
+	ok( 'it shows the switch', false !== strpos( $html, 'Switch deployments off' ) || false !== strpos( $html, 'Switch deployments on' ) );
+	ok( 'it shows the throttle', false !== strpos( $html, 'operations per user per hour' ) );
+	ok( 'it lists every route', substr_count( $html, '<code>/' ) >= 9, substr_count( $html, '<code>/' ) . ' route cells' );
+
+	// The agent brief lives on the page, in a field you can copy from.
+	ok( 'the paste block is a textarea on the page', false !== strpos( $html, 'id="mrmurphy-paste-block"' ) );
+	ok( 'the full brief is a textarea on the page', false !== strpos( $html, 'id="mrmurphy-full-brief"' ) );
+	ok( 'both are read-only', 2 === substr_count( $html, 'readonly="readonly"' ), substr_count( $html, 'readonly="readonly"' ) . ' read-only fields' );
+	ok( 'each has a copy button', 2 === substr_count( $html, 'data-mrmurphy-copy=' ), substr_count( $html, 'data-mrmurphy-copy=' ) . ' copy buttons' );
+	ok( 'the page does not send anyone to the repository for it', false === strpos( $html, 'AGENT-INSTRUCTIONS.md in the repository' ) );
+
+	// Personalised for this site, and never for credentials.
+	ok( 'the brief carries this site\'s own base URL', false !== strpos( $html, rest_url( MRMURPHY_RESTFUL_DEPLOY_NAMESPACE ) ) );
+	// esc_textarea() escapes quotes, so the rendered HTML holds &quot; not " —
+	// asserting the escaped form also proves the field really went through it.
+	ok( 'the brief carries the reading user\'s name', false !== strpos( $html, 'username &quot;' . wp_get_current_user()->user_login . '&quot;' ) );
+	ok( 'the password placeholder is left as a placeholder', false !== strpos( $html, '&lt;APPLICATION PASSWORD&gt;' ) );
+	ok( 'no credential is rendered into the page', false === strpos( $html, '<APPLICATION PASSWORD>' ) );
+
+	// Switching off changes the page, not the brief.
+	MRMurphy_Restful_Deploy_Plugin::set_enabled( false );
+
+	ob_start();
+	$page->render();
+	$off_html = ob_get_clean();
+
+	ok( 'switched off, the screen says OFF', false !== strpos( $off_html, '>OFF<' ) );
+	ok( 'switched off, it offers to switch on', false !== strpos( $off_html, 'Switch deployments on' ) );
+	ok( 'the brief is still offered while deployments are off', false !== strpos( $off_html, 'id="mrmurphy-paste-block"' ) );
+	ok( 'still no warnings when switched off', 0 === substr_count( $off_html, 'Warning' ) );
 
 	// Leave the site in the default, deployments-on state, whatever this phase did.
 	pkg_tidy_up();

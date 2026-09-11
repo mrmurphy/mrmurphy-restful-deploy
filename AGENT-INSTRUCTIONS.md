@@ -4,6 +4,10 @@ Everything an agent needs to deploy and manage plugins and themes on a site runn
 plugin. The first block is meant to be **copied verbatim** into the agent's context; the rest
 is the reference it can look things up in.
 
+> The same text, with your site's base URL filled in, is on **Settings → Restful Deploy** in
+> the WordPress admin: the block below in one field you can copy, and this whole reference in
+> another.
+
 ---
 
 ## Paste this into your agent
