@@ -14,24 +14,41 @@ python3 make_fixtures.py                     # (re)build the fixture zips
 # 1. default state: the plugin is inert, nothing may install
 PKG_PHASE=disabled wp eval-file run-tests.php
 
-# 2. enabled: full install / activate / validate flow
+# 2. the settings-screen switch, with no constant defined
+PKG_PHASE=toggle wp eval-file run-tests.php
+
+# 3. wp-config.php is the boss: a defined false beats an armed screen
+MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF=1 PKG_PHASE=forced_off wp eval-file run-tests.php
+
+# 4. enabled: full install / activate / validate / uninstall flow
 MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled wp eval-file run-tests.php
 ```
 
-Expected: `5 passed, 0 failed` then `127 passed, 0 failed`.
+Expected, in that order: `5 passed, 0 failed`, `16 passed, 0 failed`, `5 passed, 0 failed`,
+`129 passed, 0 failed`.
 
 ## How the phase switch works
 
 The constant gate is exercised for real: `wp-content/mu-plugins` holds a
 throwaway drop-in that defines `MRMURPHY_RESTFUL_DEPLOY_ENABLED` only when
-`MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE` is set, so phase 1 sees the true default
-(disabled) and phase 2 sees the wp-config.php equivalent. That drop-in
+`MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE` (true) or `MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF`
+(`false`) is set in the environment. Phase 1 and 2 run with no constant at all —
+which is what lets phase 2 test the settings-screen toggle, since that is the
+branch a missing constant takes. That drop-in
 (`zz-mrmurphy-restful-deploy-test-consts.php`) is a test fixture — delete it when you
 are done testing, it is not part of the plugin.
+
+Every phase opens with the options deleted (`…_log`, `…_refusals`, `…_enabled`,
+`…_until`, `…_expiry_logged`), so runs are repeatable and order-independent.
 
 ## What the suite covers
 
 - The master switch: routes exist but answer 403 while disabled.
+- The settings-screen switch (phase `toggle`, no constant defined): closed by default, arming
+  answers requests, the window expiry closes the endpoints on its own, disarm closes them, and
+  arm/disarm/expiry each land in the audit log exactly once.
+- `wp-config.php` precedence (phase `forced_off`): a defined `false` keeps the endpoints closed
+  even while the settings screen says they are armed.
 - Gate order: master switch → login → HTTPS → application password → capability.
 - Capability denial (`rest_cannot_manage_plugins`) and the SSL gate.
 - Archive validation: flat zips, `../` traversal entries, non-package zips,

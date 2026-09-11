@@ -81,6 +81,15 @@ function payload( $file ) {
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
 delete_option( 'mrmurphy_restful_deploy_log' );
 delete_option( 'mrmurphy_restful_deploy_refusals' );
+delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
+delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
+delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
+
+// The per-user hourly throttle counter is keyed by user and hour; clear them all
+// so a previous run's budget cannot make this one fail.
+global $wpdb;
+$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'mrmurphy_restful_deploy_ops_%'" );
+
 deactivate_plugins( 'mrmurphy-test-package/mrmurphy-test-package.php', true );
 foreach ( array( WP_PLUGIN_DIR . '/mrmurphy-test-package', get_theme_root() . '/mrmurphy-test-theme' ) as $stale ) {
 	if ( ! is_dir( $stale ) ) {
@@ -128,6 +137,91 @@ if ( 'disabled' === $phase ) {
 	$resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => payload( $dir . '/mrmurphy-test-package.zip' ) ) );
 	ok( 'disabled API refuses installs', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
 	ok( 'nothing was installed while disabled', ! is_dir( WP_PLUGIN_DIR . '/mrmurphy-test-package' ) );
+
+	tally();
+	return;
+}
+
+if ( 'toggle' === $phase ) {
+	$toggle_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $toggle_admins ? (int) $toggle_admins[0] : 1 );
+
+	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 100; } );
+
+	ok( 'no constant defined, so the settings screen decides', false === defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) );
+	ok( 'the toggle starts closed', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	ok( 'control source is the default', 'default' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'closed endpoints answer 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+
+	$armed_until = MRMurphy_Restful_Deploy_Plugin::arm( 30 );
+	ok( 'arming sets a window in the future', $armed_until > time() );
+	ok( 'armed => enabled', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	ok( 'control source is the toggle', 'toggle' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'armed endpoints answer 200', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+
+	$open_actions = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
+	ok( 'arming is audited', in_array( 'settings_arm', $open_actions, true ) );
+
+	// The window runs out: no cron, no request needed — the switch closes itself.
+	update_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL, time() - 10 );
+	ok( 'an expired window is closed', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'expired window answers 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+
+	$expired_actions = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
+	ok( 'the expiry is audited once', 1 === count( array_keys( $expired_actions, 'settings_expired', true ) ), implode( ',', array_slice( $expired_actions, 0, 6 ) ) );
+
+	MRMurphy_Restful_Deploy_Plugin::disarm();
+	ok( 'disarm closes the endpoints', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+
+	$closed_actions = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
+	ok( 'disarming is audited', in_array( 'settings_disarm', $closed_actions, true ) );
+
+	// An allowlist, so the form cannot ask for an arbitrary window.
+	MRMurphy_Restful_Deploy_Plugin::arm( 0 );
+	ok( 'arm( 0 ) means until disarmed', 0 === MRMurphy_Restful_Deploy_Plugin::toggle_expires() );
+	ok( 'a zero window stays armed', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
+
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
+	delete_option( 'mrmurphy_restful_deploy_log' );
+	delete_option( 'mrmurphy_restful_deploy_refusals' );
+
+	tally();
+	return;
+}
+
+if ( 'forced_off' === $phase ) {
+	$off_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $off_admins ? (int) $off_admins[0] : 1 );
+
+	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 100; } );
+
+	ok( 'the constant is defined as false', true === defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) && false === MRMURPHY_RESTFUL_DEPLOY_ENABLED );
+	ok( 'control source is the constant', 'constant-off' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+
+	$armed_until = MRMurphy_Restful_Deploy_Plugin::arm( 30 );
+	ok( 'the screen can still record a window', $armed_until > time() );
+	ok( 'wp-config.php wins: still closed', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'forced-off endpoints answer 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
+	delete_option( 'mrmurphy_restful_deploy_log' );
+	delete_option( 'mrmurphy_restful_deploy_refusals' );
 
 	tally();
 	return;

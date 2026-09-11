@@ -6,8 +6,9 @@ application password, with an audit log. Built to work well with scripts and AI 
 
 MIT licensed. Repository: <https://github.com/mrmurphy/mrmurphy-restful-deploy>.
 
-The plugin is **inert until you turn it on**: every route answers `403` until
-`MRMURPHY_RESTFUL_DEPLOY_ENABLED` is defined in `wp-config.php`.
+The plugin is **inert until you arm it**: every route answers `403` until you turn it on from
+**Settings → Restful Deploy**, or define `MRMURPHY_RESTFUL_DEPLOY_ENABLED` in
+`wp-config.php`. Nothing about the API can arm itself.
 
 ## Why this exists
 
@@ -30,18 +31,43 @@ evidence.
 
 1. Copy this directory to `wp-content/plugins/mrmurphy-restful-deploy/`.
 2. Activate it (Plugins screen, or `wp plugin activate mrmurphy-restful-deploy`).
-3. Add the switch to `wp-config.php`:
+3. Create an Application Password: **Users → Profile → Application Passwords**.
+4. Arm the endpoints: **Settings → Restful Deploy → Arm endpoints**, or define the constant
+   in `wp-config.php`:
 
 ```php
 define( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED', true );
 ```
 
-4. Create an Application Password: **Users → Profile → Application Passwords**.
+Until step 4 the plugin shows a warning on the Plugins screen telling you the endpoints are
+closed, and its routes answer `403 mrmurphy_restful_deploy_disabled` to an authenticated
+admin. An **unauthenticated** caller gets a plain `404 rest_no_route` instead, so the
+endpoint cannot be fingerprinted from outside.
 
-Until step 3 the plugin shows a warning on the Plugins screen and its routes answer
-`403 mrmurphy_restful_deploy_disabled` to an authenticated admin. An **unauthenticated** caller
-gets a plain `404 rest_no_route` instead, so the endpoint cannot be fingerprinted from
-outside.
+## Controlling the endpoints
+
+Two ways in, with a defined precedence:
+
+1. **`MRMURPHY_RESTFUL_DEPLOY_ENABLED` in `wp-config.php`, if it is defined at all.** `true`
+   forces the endpoints on; `false` forces them **off even when the settings screen has armed
+   them**, and the screen says so rather than lying about it. The hard override: it lives in a
+   file only someone with filesystem access can edit.
+2. **Settings → Restful Deploy** — a `manage_options` screen (network plugins capability on
+   multisite). Arm for 15 minutes, 30, 60, 4 hours, or until disarmed. It also shows the
+   gates, the endpoint list, the last ten audit entries and this hour's refusal counts.
+3. Nothing else. **There is no route that arms these endpoints** — deliberately, so a leaked
+   Application Password cannot open the door for itself. Arming is a human action on a screen,
+   and every arm, disarm and expiry is written to the audit log.
+
+The honest trade-off: an armed window lives in the database, so someone holding an admin
+session could arm it, whereas the constant cannot be flipped from the web at all. If that
+matters for your site, use the constant and leave the screen alone. The window exists because
+the failure mode people actually hit is forgetting it is on: pick 30 minutes, deploy, walk
+away, and the endpoints close themselves — the audit log records the expiry even if nobody was
+watching at the time.
+
+Either way the other gates still apply: HTTPS only, Application Password only, real
+capabilities, a per-user hourly throttle, and a full audit trail.
 
 ## Authentication
 
@@ -218,7 +244,7 @@ can still go wrong.
   deactivation-before-delete is logged before the destructive call. A package whose own
   activation or uninstall hook deletes the log or calls `exit` can therefore still be
   traced to its install.
-- Gate refusals and validation failures are **counted, not logged** (bounded hourly
+- Refusals are **counted, not logged** (bounded hourly
   counters, returned by `GET /log` under `refusals`). A caller who is already refused must
   not be able to grow — and therefore evict from — the capped audit log.
 - Entries record the application-password UUID (`auth_uuid`) and user agent, so a leaked
@@ -246,7 +272,7 @@ can still go wrong.
 
 | Code | HTTP | Meaning |
 | --- | --- | --- |
-| `mrmurphy_restful_deploy_disabled` | 403 | Master switch off (admin view; anonymous gets 404). |
+| `mrmurphy_restful_deploy_disabled` | 403 | Master switch off: arm it on Settings → Restful Deploy (anonymous callers get 404). |
 | `mrmurphy_restful_deploy_not_authenticated` | 401 | No user context. |
 | `mrmurphy_restful_deploy_requires_ssl` | 403 | Not HTTPS. |
 | `mrmurphy_restful_deploy_requires_application_password` | 403 | Cookie/nonce session, or no Basic credentials on this request. |
@@ -312,11 +338,34 @@ Refusals are **not** written as entries: that would let a caller who is already 
 the capped log and evict real evidence. They are counted per hour instead and returned by
 `GET /log` under `refusals`.
 
+## Using it from an agent
+
+`AGENT-INSTRUCTIONS.md` is written for exactly that: a short block to paste into an agent's
+context, followed by the endpoint reference, copy-paste recipes, ZIP rules and a table of
+every error code with the correct response to it. It ends with the house rules (dry-run
+first, never overwrite unasked, one mutation at a time, stop and ask when the endpoints are
+closed) and the things an agent must never do.
+
+The short version of what an agent needs: the base URL, an Application Password, and
+`GET /inventory` first — that response says whether the door is open (`gates.enabled`,
+`gates.controlled_by`, `gates.armed_until`) and what is already installed.
+
 ## Tests
 
 `tests/` holds a WP-CLI harness that drives the real REST dispatch path against a local
-copy: `python3 tests/make_fixtures.py`, then
-`PKG_PHASE=disabled wp eval-file tests/run-tests.php` and
-`MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled wp eval-file tests/run-tests.php`.
-Expected: `5 passed, 0 failed` then `127 passed, 0 failed`. It mutates whatever site it runs
-against — never point it at mrmurphy.dev. See `tests/README.md`.
+copy:
+
+```bash
+python3 tests/make_fixtures.py                                    # rebuild fixture ZIPs
+
+PKG_PHASE=disabled    wp eval-file tests/run-tests.php            # 5 assertions
+PKG_PHASE=toggle      wp eval-file tests/run-tests.php            # 16 — the settings switch
+MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF=1 PKG_PHASE=forced_off \
+                      wp eval-file tests/run-tests.php            # 5 — the constant wins
+MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled \
+                      wp eval-file tests/run-tests.php            # 129 — the whole API
+```
+
+The harness mutates whatever site it runs against (it installs a fixture plugin and theme
+called `mrmurphy-test-package` / `mrmurphy-test-theme`, then restores the previous theme) —
+never point it at mrmurphy.dev. See `tests/README.md`.
