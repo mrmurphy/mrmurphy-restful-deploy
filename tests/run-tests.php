@@ -2,7 +2,7 @@
 /**
  * In-process end-to-end test for mrmurphy-restful-deploy.
  *
- * Run: PKG_PHASE=disabled|enabled wp eval-file test.php
+ * Run: PKG_PHASE=disabled|toggle|forced_off|enabled wp eval-file run-tests.php
  *
  * Drives the real REST dispatch path (rest_do_request), the real capability
  * gates, the real upgrader and the real filesystem. The only thing relaxed is
@@ -15,6 +15,45 @@ defined( 'ABSPATH' ) || exit;
 
 $phase = getenv( 'PKG_PHASE' ) ?: 'enabled';
 $dir   = WP_PLUGIN_DIR . '/mrmurphy-restful-deploy/tests/fixtures';
+
+/**
+ * Remove the fixture plugin and theme, and clear the caches that point at them.
+ *
+ * Runs at the start of every phase, so runs are order-independent, and again at
+ * the end of the enabled phase, so a finished run leaves the site as it found it.
+ */
+function pkg_cleanup_fixtures() {
+	deactivate_plugins( 'mrmurphy-test-package/mrmurphy-test-package.php', true );
+
+	foreach ( array( WP_PLUGIN_DIR . '/mrmurphy-test-package', get_theme_root() . '/mrmurphy-test-theme' ) as $stale ) {
+		if ( is_link( $stale ) ) {
+			// Never recurse through a link: that is how a cleanup eats someone's repo.
+			unlink( $stale );
+			continue;
+		}
+
+		if ( ! is_dir( $stale ) ) {
+			continue;
+		}
+
+		$items = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator( $stale, FilesystemIterator::SKIP_DOTS ),
+			RecursiveIteratorIterator::CHILD_FIRST
+		);
+
+		foreach ( $items as $item ) {
+			if ( $item->isDir() ) {
+				rmdir( $item->getPathname() );
+			} else {
+				unlink( $item->getPathname() );
+			}
+		}
+
+		rmdir( $stale );
+	}
+
+	wp_clean_plugins_cache( false );
+}
 
 $GLOBALS['pkg_test'] = array(
 	'pass'   => 0,
@@ -90,28 +129,7 @@ delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
 global $wpdb;
 $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'mrmurphy_restful_deploy_ops_%'" );
 
-deactivate_plugins( 'mrmurphy-test-package/mrmurphy-test-package.php', true );
-foreach ( array( WP_PLUGIN_DIR . '/mrmurphy-test-package', get_theme_root() . '/mrmurphy-test-theme' ) as $stale ) {
-	if ( ! is_dir( $stale ) ) {
-		continue;
-	}
-
-	$items = new RecursiveIteratorIterator(
-		new RecursiveDirectoryIterator( $stale, FilesystemIterator::SKIP_DOTS ),
-		RecursiveIteratorIterator::CHILD_FIRST
-	);
-
-	foreach ( $items as $item ) {
-		if ( $item->isDir() ) {
-			rmdir( $item->getPathname() );
-		} else {
-			unlink( $item->getPathname() );
-		}
-	}
-
-	rmdir( $stale );
-}
-wp_clean_plugins_cache( false );
+pkg_cleanup_fixtures();
 
 echo "=== phase: {$phase} ===\n";
 
@@ -223,6 +241,18 @@ if ( 'forced_off' === $phase ) {
 	delete_option( 'mrmurphy_restful_deploy_log' );
 	delete_option( 'mrmurphy_restful_deploy_refusals' );
 
+	tally();
+	return;
+}
+
+// Precondition: this phase is meaningless without the injected constant. Assert it
+// here, so a missing mu-plugin fixture fails once and says why instead of failing
+// a hundred times for reasons that look like plugin bugs.
+$const_ok = defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) ? ( false !== MRMURPHY_RESTFUL_DEPLOY_ENABLED ) : false;
+ok( 'precondition: MRMURPHY_RESTFUL_DEPLOY_ENABLED is defined true (was the mu-plugin fixture copied in?)', $const_ok );
+
+if ( ! $const_ok ) {
+	echo "Aborting the enabled phase: the constant is not defined, so nothing here would be testing the enabled path.\n";
 	tally();
 	return;
 }
@@ -640,5 +670,26 @@ for ( $i = 0; $i < 25; $i++ ) {
 	req( '/mrmurphy-restful-deploy/v1/plugins', 'DELETE', array( 'plugin' => 'nope-' . $i . '/nope.php' ) );
 }
 ok( 'refused requests did not evict the audit log', count( MRMurphy_Restful_Deploy_Log::all() ) >= $log_size_before, $log_size_before . ' -> ' . count( MRMurphy_Restful_Deploy_Log::all() ) );
+
+/* -------------------------------------------------------------------- */
+/*  8. Leave the site as we found it                                     */
+/* -------------------------------------------------------------------- */
+
+// The pre-clean does this too, so a run never depends on the one before it.
+// Doing it again here means a finished run does not leave a fixture plugin and
+// theme sitting on the site, nor a pile of options behind them.
+pkg_cleanup_fixtures();
+delete_option( 'mrmurphy_restful_deploy_log' );
+delete_option( 'mrmurphy_restful_deploy_refusals' );
+delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
+delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
+delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
+$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'mrmurphy_restful_deploy_ops_%'" );
+wp_clean_plugins_cache( false );
+
+ok( 'fixture plugin removed', ! is_dir( WP_PLUGIN_DIR . '/mrmurphy-test-package' ) && ! is_plugin_active( 'mrmurphy-test-package/mrmurphy-test-package.php' ) );
+ok( 'fixture theme removed', ! is_dir( trailingslashit( get_theme_root() ) . 'mrmurphy-test-theme' ) );
+ok( 'the active theme was left alone', $original_stylesheet === get_stylesheet(), get_stylesheet() );
+ok( 'the plugin left no options behind', false === get_option( 'mrmurphy_restful_deploy_log', false ) && false === get_option( 'mrmurphy_restful_deploy_refusals', false ) );
 
 tally();

@@ -8,7 +8,17 @@ distribution.
 ## Run
 
 ```bash
-cd wp-content/plugins/mrmurphy-restful-deploy/tests
+# 1. copy the constant fixture into the TARGET SITE's mu-plugins.
+#    Phases 3 and 4 need it; 1 and 2 must run without it.
+#    Use an absolute path: the plugin directory is usually a symlink into a repo
+#    elsewhere, and from a symlinked cwd a relative ../../.. lands in the physical
+#    parent — /Users/you/projects/mu-plugins, which does not exist. The copy fails
+#    silently in a compound command, the constant is never defined, and phases 3
+#    and 4 then "fail" for reasons that have nothing to do with the plugin.
+SITE=/Users/you/Studio/yoursite/wp-content
+cp tests/mu-plugin-consts.php "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
+
+cd tests
 python3 make_fixtures.py                     # (re)build the fixture zips
 
 # 1. default state: the plugin is inert, nothing may install
@@ -22,10 +32,18 @@ MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF=1 PKG_PHASE=forced_off wp eval-file run-t
 
 # 4. enabled: full install / activate / validate / uninstall flow
 MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled wp eval-file run-tests.php
+
+# then, when you are done:
+rm "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
 ```
 
 Expected, in that order: `5 passed, 0 failed`, `16 passed, 0 failed`, `5 passed, 0 failed`,
-`129 passed, 0 failed`.
+`134 passed, 0 failed`.
+
+Every phase clears its fixture plugin/theme and the plugin's options at the start, so runs are
+repeatable and order-independent; the `enabled` phase clears them again at the end and asserts
+the site was left as found (fixtures gone, active theme untouched, no options left), so a
+finished run does not leave debris on the site.
 
 ## How the phase switch works
 

@@ -363,9 +363,10 @@ PKG_PHASE=toggle      wp eval-file tests/run-tests.php            # 16 — the s
 MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF=1 PKG_PHASE=forced_off \
                       wp eval-file tests/run-tests.php            # 5 — the constant wins
 MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled \
-                      wp eval-file tests/run-tests.php            # 129 — the whole API
+                      wp eval-file tests/run-tests.php            # 134 — the whole API
 ```
 
 The harness mutates whatever site it runs against (it installs a fixture plugin and theme
-called `mrmurphy-test-package` / `mrmurphy-test-theme`, then restores the previous theme) —
-never point it at mrmurphy.dev. See `tests/README.md`.
+called `mrmurphy-test-package` / `mrmurphy-test-theme`, then restores the previous theme and
+removes both fixtures and its own options at the end), but run it against a local copy, never
+against a live site. See `tests/README.md`.
