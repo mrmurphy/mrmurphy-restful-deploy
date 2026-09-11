@@ -27,9 +27,9 @@ How to work:
 - If a request fails, read the error code and follow the recovery table below
   instead of retrying blindly.
 
-If you get 403 mrmurphy_restful_deploy_disabled, the endpoints are closed. You cannot
-open them — no route does that. Ask the human to arm them on Settings → Restful Deploy,
-then continue.
+If you get 403 mrmurphy_restful_deploy_disabled, deployments are switched off for this
+site. You cannot switch them back on — no route does that. Ask the human to switch them
+on under Settings → Restful Deploy, then continue.
 ```
 
 ---
@@ -38,8 +38,9 @@ then continue.
 
 It installs, activates, overwrites and uninstalls **plugin and theme ZIPs** over the
 WordPress REST API, using capabilities the WordPress user already has — so an agent can
-deploy code without SFTP, SSH or WP-CLI. Everything it does is audited, and the endpoints
-are closed unless a human has armed them.
+deploy code without SFTP, SSH or WP-CLI. Everything it does is audited. It is on by default,
+and a human can switch it off (or a `wp-config.php` constant can kill it) at any time — so
+check, and expect to be told no.
 
 Base URL: `https://<SITE>/wp-json/mrmurphy-restful-deploy/v1`
 
@@ -51,7 +52,7 @@ Use this API for ZIPs you built yourself.
 
 | Check | How | If it fails |
 | --- | --- | --- |
-| Endpoints armed | any request; `403 mrmurphy_restful_deploy_disabled` means closed | ask the human to arm them on **Settings → Restful Deploy** |
+| Deployments switched on | any request; `403 mrmurphy_restful_deploy_disabled` means they are off | ask the human to switch them on under **Settings → Restful Deploy** |
 | Application password | the human creates it in **Users → Profile → Application Passwords** | ask for one; a normal login password will not work |
 | HTTPS | the site must be `https://` | the API refuses plain HTTP |
 | Right host | call the site's own `/wp-json/...` | do not route through `public-api.wordpress.com`; this namespace is not proxied there |
@@ -65,7 +66,7 @@ Quote it anyway — the shell would otherwise mangle a space.
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/inventory` | Installed plugins + themes, update status, gates, armed state |
+| `GET` | `/inventory` | Installed plugins + themes, update status, gates, on/off state |
 | `GET` | `/log?limit=50` | Audit log (newest first) and refusal counters |
 | `POST` | `/plugins` | Install a plugin ZIP, optionally activate |
 | `POST` | `/plugins/activate` | Activate an installed plugin |
@@ -102,8 +103,8 @@ AUTH='user:abcd EFGH 1234 ijkl MNOP 5678'
 curl -sS -u "$AUTH" "$SITE/inventory" | python3 -m json.tool
 ```
 
-Read `gates.enabled` (is it armed?), `gates.controlled_by`, `plugins[]` (`plugin`, `version`,
-`status`, `update_available`) and `themes[]`.
+Read `gates.enabled` (are deployments on?), `gates.controlled_by`, `plugins[]` (`plugin`,
+`version`, `status`, `update_available`) and `themes[]`.
 
 **2. Validate a package without touching the site.**
 
@@ -179,7 +180,7 @@ curl -sS -u "$AUTH" "$SITE/log?limit=20" | python3 -m json.tool
 
 | Error code | HTTP | What it means / what to do |
 | --- | --- | --- |
-| `mrmurphy_restful_deploy_disabled` | 403 | Endpoints closed. **Ask the human to arm them.** Do not retry. |
+| `mrmurphy_restful_deploy_disabled` | 403 | Deployments are switched off. **Ask the human to switch them on.** Do not retry. |
 | `mrmurphy_restful_deploy_not_authenticated` | 401 | Credentials missing or wrong. Ask for a fresh application password. |
 | `mrmurphy_restful_deploy_requires_application_password` | 403 | You authenticated with a browser session, not Basic auth. |
 | `mrmurphy_restful_deploy_requires_ssl` | 403 | Use `https://`. |
@@ -214,7 +215,7 @@ curl -sS -u "$AUTH" "$SITE/log?limit=20" | python3 -m json.tool
 
 ## What the agent must never do
 
-- Try to turn the endpoints on. No route arms them; that is a deliberate, human-only action.
+- Try to switch deployments on or off. No route does that; it is a deliberate, human-only action.
 - Install a package from a source nobody vouched for.
 - Delete or deactivate a security plugin to "make things work".
 - Retry a `429` or a `403` expecting a different answer.

@@ -6,9 +6,9 @@ application password, with an audit log. Built to work well with scripts and AI 
 
 MIT licensed. Repository: <https://github.com/mrmurphy/mrmurphy-restful-deploy>.
 
-The plugin is **inert until you arm it**: every route answers `403` until you turn it on from
-**Settings → Restful Deploy**, or define `MRMURPHY_RESTFUL_DEPLOY_ENABLED` in
-`wp-config.php`. Nothing about the API can arm itself.
+The plugin is **on by default**: activate it, create an Application Password, and deployments
+work. Switch it off — and back on — from **Settings → Restful Deploy**, or define
+`MRMURPHY_RESTFUL_DEPLOY_ENABLED` in `wp-config.php` as the hard kill switch.
 
 ## Why this exists
 
@@ -32,42 +32,34 @@ evidence.
 1. Copy this directory to `wp-content/plugins/mrmurphy-restful-deploy/`.
 2. Activate it (Plugins screen, or `wp plugin activate mrmurphy-restful-deploy`).
 3. Create an Application Password: **Users → Profile → Application Passwords**.
-4. Arm the endpoints: **Settings → Restful Deploy → Arm endpoints**, or define the constant
-   in `wp-config.php`:
 
-```php
-define( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED', true );
-```
-
-Until step 4 the plugin shows a warning on the Plugins screen telling you the endpoints are
-closed, and its routes answer `403 mrmurphy_restful_deploy_disabled` to an authenticated
-admin. An **unauthenticated** caller gets a plain `404 rest_no_route` instead, so the
-endpoint cannot be fingerprinted from outside.
+That is the whole install — deployments are on out of the box. Nothing has to be enabled
+first, and no constant is required. To close the endpoints again, go to
+**Settings → Restful Deploy** and switch them off; to close them from code, see below.
 
 ## Controlling the endpoints
 
-Two ways in, with a defined precedence:
+**On by default, with two ways to change that.**
 
-1. **`MRMURPHY_RESTFUL_DEPLOY_ENABLED` in `wp-config.php`, if it is defined at all.** `true`
-   forces the endpoints on; `false` forces them **off even when the settings screen has armed
-   them**, and the screen says so rather than lying about it. The hard override: it lives in a
-   file only someone with filesystem access can edit.
-2. **Settings → Restful Deploy** — a `manage_options` screen (network plugins capability on
-   multisite). Arm for 15 minutes, 30, 60, 4 hours, or until disarmed. It also shows the
-   gates, the endpoint list, the last ten audit entries and this hour's refusal counts.
-3. Nothing else. **There is no route that arms these endpoints** — deliberately, so a leaked
-   Application Password cannot open the door for itself. Arming is a human action on a screen,
-   and every arm, disarm and expiry is written to the audit log.
+1. **Settings → Restful Deploy**, a `manage_options` screen (network plugins capability on
+   multisite). One button, both directions: *Switch deployments off* / *Switch deployments on*.
+   It also shows what the switch is doing, the gates, the endpoint list, the last ten audit
+   entries and this hour's refusal counts. Both directions are written to the audit log, so
+   "who turned this back on?" has an answer.
+2. **`MRMURPHY_RESTFUL_DEPLOY_ENABLED` in `wp-config.php`, if it is defined at all.** This is
+   the hard override for someone with code access: `false` kills the endpoints dead — it beats
+   the settings screen, so nothing reachable from the admin (a stolen session, a rogue plugin)
+   can bring them back. `true` pins them on so no UI can switch them off. Most sites never need
+   either; `false` is there for the day you want the feature gone *now*.
+3. Nothing else. **No route switches the endpoints on or off**, and nothing in the plugin
+   changes the setting on its own — there is no timer, no window, no schedule.
 
-The honest trade-off: an armed window lives in the database, so someone holding an admin
-session could arm it, whereas the constant cannot be flipped from the web at all. If that
-matters for your site, use the constant and leave the screen alone. The window exists because
-the failure mode people actually hit is forgetting it is on: pick 30 minutes, deploy, walk
-away, and the endpoints close themselves — the audit log records the expiry even if nobody was
-watching at the time.
-
-Either way the other gates still apply: HTTPS only, Application Password only, real
-capabilities, a per-user hourly throttle, and a full audit trail.
+Why it works this way: an Application Password *is* the credential, and the plugin trusts it —
+it has to, that is the feature. What the plugin adds around it is blast-radius and evidence,
+not a second gate: HTTPS only, an Application Password rather than a replayable nonce, the
+capabilities the WordPress user already has, a per-user hourly throttle so a runaway script
+cannot churn the site, and an audit log of every attempt. The kill switch is the escape hatch
+for when trust is exactly what you have lost.
 
 ## Authentication
 
@@ -272,7 +264,7 @@ can still go wrong.
 
 | Code | HTTP | Meaning |
 | --- | --- | --- |
-| `mrmurphy_restful_deploy_disabled` | 403 | Master switch off: arm it on Settings → Restful Deploy (anonymous callers get 404). |
+| `mrmurphy_restful_deploy_disabled` | 403 | Deployments switched off (or killed by the constant): switch them on under Settings → Restful Deploy. Anonymous callers get 404. |
 | `mrmurphy_restful_deploy_not_authenticated` | 401 | No user context. |
 | `mrmurphy_restful_deploy_requires_ssl` | 403 | Not HTTPS. |
 | `mrmurphy_restful_deploy_requires_application_password` | 403 | Cookie/nonce session, or no Basic credentials on this request. |
@@ -306,10 +298,11 @@ can still go wrong.
 
 ## Configuration constants
 
-All optional except the first. **Every default fails closed.**
+All optional. **Every gate other than the master switch defaults to closed**, and the plugin
+deploys out of the box.
 
 ```php
-define( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED', true );                  // required
+define( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED', false );                 // master switch, default ON
 define( 'MRMURPHY_RESTFUL_DEPLOY_REQUIRE_APP_PASSWORD', true );     // default true
 define( 'MRMURPHY_RESTFUL_DEPLOY_REQUIRE_SSL', true );              // default true
 define( 'MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE', true );          // default FALSE: opt in
@@ -318,8 +311,13 @@ define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_UNCOMPRESSED_BYTES', 512 * 1024 * 1024 );
 define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR', 12 );    // default 12
 ```
 
-Every constant is read as "defined and not the boolean `false`", so `1` behaves like `true`
-and an undefined constant always takes the restrictive branch.
+`MRMURPHY_RESTFUL_DEPLOY_ENABLED` is the exception to the "defined and not `false`" rule that
+governs the others: it is the master switch, so what it is defined *as* matters. `false` is the
+hard kill switch — it overrides the settings screen and the screen says so; `true` pins
+deployments on; undefined leaves the settings screen in charge (and the screen defaults to on).
+
+Every other constant is read as "defined and not the boolean `false`", so `1` behaves like
+`true` and an undefined constant always takes the restrictive branch.
 
 Filters: `mrmurphy_restful_deploy_enabled`, `..._app_password_required`, `..._ssl_required`,
 `..._overwrite_allowed`, `..._max_bytes`, `..._max_uncompressed_bytes`,
@@ -358,13 +356,16 @@ copy:
 ```bash
 python3 tests/make_fixtures.py                                    # rebuild fixture ZIPs
 
-PKG_PHASE=disabled    wp eval-file tests/run-tests.php            # 5 assertions
-PKG_PHASE=toggle      wp eval-file tests/run-tests.php            # 16 — the settings switch
-MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF=1 PKG_PHASE=forced_off \
-                      wp eval-file tests/run-tests.php            # 5 — the constant wins
-MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled \
-                      wp eval-file tests/run-tests.php            # 134 — the whole API
+PKG_PHASE=default     wp eval-file tests/run-tests.php            # 6 — out of the box it is ON
+PKG_PHASE=off         wp eval-file tests/run-tests.php            # 10 — the off switch, both ways
+PKG_PHASE=forced_off  wp eval-file tests/run-tests.php            # 7 — the kill switch wins
+PKG_PHASE=forced_on   wp eval-file tests/run-tests.php            # 5 — the constant can pin it on
+PKG_PHASE=enabled     wp eval-file tests/run-tests.php            # 134 — the whole API
 ```
+
+`forced_off` and `forced_on` need the constant fixture copied into the target site's
+`mu-plugins` (see `tests/README.md`); `default`, `off` and `enabled` run against a stock site
+with nothing installed but the plugin.
 
 The harness mutates whatever site it runs against (it installs a fixture plugin and theme
 called `mrmurphy-test-package` / `mrmurphy-test-theme`, then restores the previous theme and

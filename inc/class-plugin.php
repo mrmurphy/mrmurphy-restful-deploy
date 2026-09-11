@@ -29,14 +29,17 @@ final class MRMurphy_Restful_Deploy_Plugin {
 	/** @var MRMurphy_Restful_Deploy_Admin|null */
 	public $admin = null;
 
-	/** @var string Option holding whether the deployment endpoints are armed. */
+	/**
+	 * Option holding whether the deployment endpoints are switched off.
+	 *
+	 * Absent means ON: an unset option is the default, working state. Only an
+	 * explicit false — written by the settings screen — turns deployments off,
+	 * which also means "delete the option" can never be mistaken for "quietly
+	 * enable", and the constant in wp-config.php is checked first regardless.
+	 *
+	 * @var string
+	 */
 	const OPTION_ENABLED = 'mrmurphy_restful_deploy_enabled';
-
-	/** @var string Option holding the expiry of an armed window (0 = none). */
-	const OPTION_UNTIL = 'mrmurphy_restful_deploy_until';
-
-	/** @var string Bookkeeping, so an expiry is logged exactly once. */
-	const OPTION_EXPIRY_LOGGED = 'mrmurphy_restful_deploy_expiry_logged';
 
 	/**
 	 * Singleton accessor.
@@ -73,7 +76,7 @@ final class MRMurphy_Restful_Deploy_Plugin {
 				'plugin_activated',
 				plugin_basename( MRMURPHY_RESTFUL_DEPLOY_FILE ),
 				'ok',
-				'Plugin activated while the deployment endpoints are closed: no MRMURPHY_RESTFUL_DEPLOY_ENABLED constant and no armed window. Open them on Settings → Restful Deploy when you need them.'
+				'Plugin activated with the deployment endpoints switched off: no MRMURPHY_RESTFUL_DEPLOY_ENABLED constant and the settings screen has them off. Switch them on under Settings → Restful Deploy when you need them.'
 			);
 		}
 	}
@@ -87,12 +90,13 @@ final class MRMurphy_Restful_Deploy_Plugin {
 	 *
 	 * Precedence, in order:
 	 *
-	 *   1. `MRMURPHY_RESTFUL_DEPLOY_ENABLED` in wp-config.php, if it is defined
-	 *      at all — true forces the endpoints on, and false forces them OFF even
-	 *      if the settings screen has armed them.
-	 *   2. the settings-screen toggle, which can carry an expiry so a deployment
-	 *      window closes itself.
-	 *   3. otherwise: off.
+	 *   1. `MRMURPHY_RESTFUL_DEPLOY_ENABLED` in wp-config.php, if it is defined at
+	 *      all. `false` is the hard shutoff — it beats the settings screen, so a
+	 *      lost admin session cannot turn deployments back on. `true` pins them on
+	 *      and no UI can switch them off.
+	 *   2. the settings screen, where an administrator turns them off or on.
+	 *   3. out of the box: on. Once the plugin is active and you have an
+	 *      Application Password, deployments work — there is nothing to arm first.
 	 *
 	 * @return bool
 	 */
@@ -100,7 +104,7 @@ final class MRMurphy_Restful_Deploy_Plugin {
 		if ( defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) ) {
 			$enabled = ( false !== MRMURPHY_RESTFUL_DEPLOY_ENABLED );
 		} else {
-			$enabled = self::toggle_on();
+			$enabled = self::setting_on();
 		}
 
 		/**
@@ -112,92 +116,74 @@ final class MRMurphy_Restful_Deploy_Plugin {
 	}
 
 	/**
-	 * Is the settings-screen toggle armed, and still inside its window?
+	 * The stored setting, or null when it has never been set.
 	 *
-	 * @return bool
+	 * A sentinel default is used because get_option() cannot otherwise tell "an
+	 * administrator switched this on" from "nobody has ever touched it".
+	 *
+	 * @return bool|null
 	 */
-	public static function toggle_on() {
-		if ( ! get_option( self::OPTION_ENABLED, false ) ) {
-			return false;
+	public static function stored_setting() {
+		$value = get_option( self::OPTION_ENABLED, 'unset' );
+
+		if ( 'unset' === $value ) {
+			return null;
 		}
 
-		$until = self::toggle_expires();
-
-		if ( $until > 0 && time() >= $until ) {
-			self::note_expiry( $until );
-
-			return false;
-		}
-
-		return true;
+		// Anything that reads as "off" counts as off, including a real false
+		// left behind by an older build.
+		return ! in_array( $value, array( '0', '', 0, false ), true );
 	}
 
 	/**
-	 * When an armed window closes itself, as a Unix timestamp. 0 means it stays
-	 * armed until someone turns it off.
+	 * What the settings-screen switch says, ignoring any wp-config.php override.
 	 *
-	 * @return int
+	 * @return bool
 	 */
-	public static function toggle_expires() {
-		return (int) get_option( self::OPTION_UNTIL, 0 );
+	public static function setting_on() {
+		$stored = self::stored_setting();
+
+		return null === $stored ? true : $stored;
 	}
 
 	/**
 	 * Where the current state comes from, for the settings screen.
 	 *
-	 * @return string 'constant-on', 'constant-off', 'toggle' or 'default'.
+	 * @return string 'constant-on', 'constant-off', 'screen' or 'default'.
 	 */
 	public static function control_source() {
 		if ( defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) ) {
 			return ( false !== MRMURPHY_RESTFUL_DEPLOY_ENABLED ) ? 'constant-on' : 'constant-off';
 		}
 
-		return get_option( self::OPTION_ENABLED, false ) ? 'toggle' : 'default';
+		return null === self::stored_setting() ? 'default' : 'screen';
 	}
 
 	/**
-	 * Arm the deployment endpoints.
+	 * Switch the deployment endpoints on or off from the settings screen.
 	 *
-	 * @param int $minutes Minutes until it disarms itself; 0 to stay armed.
-	 * @return int Expiry timestamp, or 0 when it stays armed.
+	 * Both directions are audited: "who turned this back on, and when" is the
+	 * first question asked after an incident.
+	 *
+	 * @param bool $on Whether deployments should be enabled.
 	 */
-	public static function arm( $minutes = 0 ) {
-		$minutes = max( 0, (int) $minutes );
-		$until   = $minutes > 0 ? time() + ( $minutes * MINUTE_IN_SECONDS ) : 0;
+	public static function set_enabled( $on ) {
+		$on = (bool) $on;
 
-		update_option( self::OPTION_ENABLED, true, false );
-		update_option( self::OPTION_UNTIL, $until, false );
+		// Stored as '1' or '0', never as a real boolean. WordPress treats
+		// update_option( $name, false ) on a missing option as a no-op — the new
+		// value is "identical" to the absent default — so storing a boolean false
+		// would silently fail to record "off" and the switch would appear to
+		// spring back on.
+		update_option( self::OPTION_ENABLED, $on ? '1' : '0' );
 
 		MRMurphy_Restful_Deploy_Log::add(
-			'settings_arm',
+			$on ? 'settings_enabled' : 'settings_disabled',
 			'routes',
 			'ok',
-			$until
-				? sprintf( 'Deployment endpoints armed for %d minutes.', $minutes )
-				: 'Deployment endpoints armed until they are turned off.',
-			array( 'until' => $until )
-		);
-
-		return $until;
-	}
-
-	/**
-	 * Disarm the deployment endpoints.
-	 *
-	 * @param string $reason 'manual' or 'expired'.
-	 */
-	public static function disarm( $reason = 'manual' ) {
-		update_option( self::OPTION_ENABLED, false, false );
-		update_option( self::OPTION_UNTIL, 0, false );
-
-		MRMurphy_Restful_Deploy_Log::add(
-			'settings_disarm',
-			'routes',
-			'ok',
-			'manual' === $reason
-				? 'Deployment endpoints disarmed from the settings screen.'
-				: 'Deployment endpoints disarmed.',
-			array( 'reason' => $reason )
+			$on
+				? 'Deployment endpoints switched on from the settings screen.'
+				: 'Deployment endpoints switched off from the settings screen.'
 		);
 	}
 
@@ -331,7 +317,7 @@ final class MRMurphy_Restful_Deploy_Plugin {
 		return array(
 			'enabled'                    => self::enabled(),
 			'controlled_by'              => self::control_source(),
-			'armed_until'                => self::toggle_expires(),
+			'setting'                    => self::setting_on(),
 			'app_password_required'      => self::app_password_required(),
 			'ssl_required'               => self::ssl_required(),
 			'is_ssl'                     => is_ssl(),
@@ -377,11 +363,9 @@ final class MRMurphy_Restful_Deploy_Plugin {
 			: '';
 
 		if ( 'constant-off' === $source ) {
-			$message = __( '<strong>MrMurphy Restful Deploy is switched off by wp-config.php.</strong> Its REST routes answer 403. Remove <code>define( \'MRMURPHY_RESTFUL_DEPLOY_ENABLED\', false );</code> to let the settings screen control it.' );
-		} elseif ( 'default' === $source ) {
-			$message = __( '<strong>MrMurphy Restful Deploy is not armed.</strong> Its REST routes answer 403. Arm it from the settings screen, or define <code>MRMURPHY_RESTFUL_DEPLOY_ENABLED</code> as true in <code>wp-config.php</code>.' );
+			$message = __( '<strong>MrMurphy Restful Deploy is switched off by wp-config.php.</strong> Its REST routes answer 403. Remove <code>define( \'MRMURPHY_RESTFUL_DEPLOY_ENABLED\', false );</code> to hand control back to the settings screen.' );
 		} else {
-			$message = __( '<strong>MrMurphy Restful Deploy closed itself.</strong> Its deployment window expired and its REST routes answer 403 again.' );
+			$message = __( '<strong>MrMurphy Restful Deploy is switched off.</strong> Its REST routes answer 403, so nothing can be deployed over the API until it is switched back on.' );
 		}
 
 		printf( '<div class="notice notice-warning"><p>%s%s</p></div>', wp_kses_post( $message ), wp_kses_post( $link ) );

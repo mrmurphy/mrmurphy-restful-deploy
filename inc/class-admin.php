@@ -1,11 +1,12 @@
 <?php
 /**
- * Settings screen: arm and disarm the deployment endpoints, and see what the
+ * Settings screen: switch the deployment endpoints off or on, and see what the
  * gates are currently doing.
  *
- * The API deliberately cannot arm itself. Enabling is a deliberate act by a
- * human on a screen that requires manage_options, and every arm, disarm and
- * expiry lands in the audit log.
+ * Deployments are on out of the box. This screen exists so that turning them
+ * off — and back on again — needs nothing but an admin login and
+ * manage_options, and so that both directions land in the audit log. A
+ * `MRMURPHY_RESTFUL_DEPLOY_ENABLED` constant in wp-config.php overrides it.
  *
  * @package MrMurphyRestfulDeploy
  */
@@ -20,16 +21,8 @@ final class MRMurphy_Restful_Deploy_Admin {
 	/** @var string Settings page slug. */
 	const PAGE = 'mrmurphy-restful-deploy';
 
-	/** @var string Nonce action for the arm/disarm form. */
+	/** @var string Nonce action for the on/off form. */
 	const NONCE = 'mrmurphy_restful_deploy_save';
-
-	/**
-	 * Arm windows offered on the screen, in minutes. 0 = until disarmed.
-	 * An allowlist, so the form cannot ask for an arbitrary window.
-	 *
-	 * @var int[]
-	 */
-	private static $windows = array( 15, 30, 60, 240, 0 );
 
 	/**
 	 * Hook the screen.
@@ -85,16 +78,10 @@ final class MRMurphy_Restful_Deploy_Admin {
 
 		$intent = isset( $_POST['intent'] ) ? sanitize_key( wp_unslash( $_POST['intent'] ) ) : '';
 
-		if ( 'arm' === $intent ) {
-			$minutes = isset( $_POST['minutes'] ) ? absint( wp_unslash( $_POST['minutes'] ) ) : 0;
-
-			if ( ! in_array( $minutes, self::$windows, true ) ) {
-				$minutes = 30;
-			}
-
-			MRMurphy_Restful_Deploy_Plugin::arm( $minutes );
-		} elseif ( 'disarm' === $intent ) {
-			MRMurphy_Restful_Deploy_Plugin::disarm();
+		if ( 'off' === $intent ) {
+			MRMurphy_Restful_Deploy_Plugin::set_enabled( false );
+		} elseif ( 'on' === $intent ) {
+			MRMurphy_Restful_Deploy_Plugin::set_enabled( true );
 		}
 
 		wp_safe_redirect( add_query_arg( array( 'page' => self::PAGE ), admin_url( 'options-general.php' ) ) );
@@ -110,13 +97,13 @@ final class MRMurphy_Restful_Deploy_Admin {
 	private function source_label( $source ) {
 		switch ( $source ) {
 			case 'constant-on':
-				return __( 'wp-config.php — forced ON by MRMURPHY_RESTFUL_DEPLOY_ENABLED', 'mrmurphy-restful-deploy' );
+				return __( 'wp-config.php — pinned on by MRMURPHY_RESTFUL_DEPLOY_ENABLED', 'mrmurphy-restful-deploy' );
 			case 'constant-off':
-				return __( 'wp-config.php — forced OFF by MRMURPHY_RESTFUL_DEPLOY_ENABLED', 'mrmurphy-restful-deploy' );
-			case 'toggle':
+				return __( 'wp-config.php — killed by MRMURPHY_RESTFUL_DEPLOY_ENABLED', 'mrmurphy-restful-deploy' );
+			case 'screen':
 				return __( 'This screen', 'mrmurphy-restful-deploy' );
 			default:
-				return __( 'Nobody — the endpoints have never been armed', 'mrmurphy-restful-deploy' );
+				return __( 'Default — on, and never switched off', 'mrmurphy-restful-deploy' );
 		}
 	}
 
@@ -134,7 +121,6 @@ final class MRMurphy_Restful_Deploy_Admin {
 
 		$enabled      = MRMurphy_Restful_Deploy_Plugin::enabled();
 		$source       = MRMurphy_Restful_Deploy_Plugin::control_source();
-		$until        = MRMurphy_Restful_Deploy_Plugin::toggle_expires();
 		$gates        = MRMurphy_Restful_Deploy_Plugin::gate_status();
 		$entries      = array_slice( MRMurphy_Restful_Deploy_Log::all(), 0, 10 );
 		$refusals     = MRMurphy_Restful_Deploy_Log::refusals();
@@ -142,52 +128,30 @@ final class MRMurphy_Restful_Deploy_Admin {
 		$counted      = isset( $refusals[ $hour ] ) && is_array( $refusals[ $hour ] ) ? $refusals[ $hour ] : array();
 		$base         = rest_url( MRMURPHY_RESTFUL_DEPLOY_NAMESPACE );
 		$source_label = $this->source_label( $source );
-
-		// "This screen" + closed can only mean one thing, and it is worth saying.
-		if ( 'toggle' === $source && ! $enabled ) {
-			$source_label .= ' — ' . __( 'the last window expired', 'mrmurphy-restful-deploy' );
-		}
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'MrMurphy Restful Deploy', 'mrmurphy-restful-deploy' ); ?></h1>
 			<p style="max-width:60em">
-				<?php esc_html_e( 'Deploy plugin and theme ZIPs to this site over the REST API — no SFTP, no SSH. This screen arms and disarms those endpoints; the API cannot arm itself.', 'mrmurphy-restful-deploy' ); ?>
+				<?php esc_html_e( 'Deploy plugin and theme ZIPs to this site over the REST API — no SFTP, no SSH. Deployments are on by default; switch them off here to close the routes.', 'mrmurphy-restful-deploy' ); ?>
 			</p>
 
 			<h2><?php esc_html_e( 'Status', 'mrmurphy-restful-deploy' ); ?></h2>
 			<table class="widefat striped" style="max-width:60em">
 				<tbody>
 					<tr>
-						<th style="width:14em"><?php esc_html_e( 'Endpoints', 'mrmurphy-restful-deploy' ); ?></th>
+						<th style="width:14em"><?php esc_html_e( 'Deployments', 'mrmurphy-restful-deploy' ); ?></th>
 						<td>
 							<?php if ( $enabled ) : ?>
-								<strong style="color:#008a20"><?php esc_html_e( 'ARMED', 'mrmurphy-restful-deploy' ); ?></strong>
+								<strong style="color:#008a20"><?php esc_html_e( 'ON', 'mrmurphy-restful-deploy' ); ?></strong>
 							<?php else : ?>
-								<strong><?php esc_html_e( 'CLOSED', 'mrmurphy-restful-deploy' ); ?></strong>
+								<strong style="color:#b32d2e"><?php esc_html_e( 'OFF', 'mrmurphy-restful-deploy' ); ?></strong>
 							<?php endif; ?>
 						</td>
 					</tr>
 					<tr>
-						<th><?php esc_html_e( 'Controlled by', 'mrmurphy-restful-deploy' ); ?></th>
+						<th><?php esc_html_e( 'Switched by', 'mrmurphy-restful-deploy' ); ?></th>
 						<td><?php echo esc_html( $source_label ); ?></td>
 					</tr>
-					<?php if ( $enabled && $until > 0 ) : ?>
-						<tr>
-							<th><?php esc_html_e( 'Closes itself', 'mrmurphy-restful-deploy' ); ?></th>
-							<td>
-								<?php
-								echo esc_html(
-									sprintf(
-										/* translators: 1: date and time, 2: minutes remaining. */
-										__( '%1$s — in %2$d minutes', 'mrmurphy-restful-deploy' ),
-										wp_date( 'Y-m-d H:i:s', $until ),
-										max( 0, (int) round( ( $until - time() ) / 60 ) )
-									)
-								);
-								?>
-							</td>
-						</tr>
-					<?php endif; ?>
 					<tr>
 						<th><?php esc_html_e( 'Base URL', 'mrmurphy-restful-deploy' ); ?></th>
 						<td><code><?php echo esc_html( $base ); ?></code></td>
@@ -201,7 +165,7 @@ final class MRMurphy_Restful_Deploy_Admin {
 						<?php
 						printf(
 							/* translators: %s: true or false. */
-							esc_html__( 'wp-config.php is in charge: MRMURPHY_RESTFUL_DEPLOY_ENABLED is defined as %s. Remove that line if you would rather control the endpoints from this screen.', 'mrmurphy-restful-deploy' ),
+							esc_html__( 'wp-config.php is in charge: MRMURPHY_RESTFUL_DEPLOY_ENABLED is %s. Remove that line to control deployments from this screen.', 'mrmurphy-restful-deploy' ),
 							'<code>' . esc_html( 'constant-on' === $source ? 'true' : 'false' ) . '</code>'
 						);
 						?>
@@ -212,33 +176,18 @@ final class MRMurphy_Restful_Deploy_Admin {
 					<input type="hidden" name="action" value="mrmurphy_restful_deploy_save" />
 					<?php wp_nonce_field( self::NONCE ); ?>
 					<?php if ( $enabled ) : ?>
-						<input type="hidden" name="intent" value="disarm" />
+						<input type="hidden" name="intent" value="off" />
 						<p>
-							<?php submit_button( __( 'Disarm now', 'mrmurphy-restful-deploy' ), 'delete', 'submit', false ); ?>
-							<span class="description"><?php esc_html_e( 'Closes the endpoints immediately. Nothing can be installed until they are armed again.', 'mrmurphy-restful-deploy' ); ?></span>
+							<?php submit_button( __( 'Switch deployments off', 'mrmurphy-restful-deploy' ), 'delete', 'submit', false ); ?>
+							<span class="description"><?php esc_html_e( 'Closes the REST routes immediately. Nothing can be installed over the API until they are switched back on.', 'mrmurphy-restful-deploy' ); ?></span>
 						</p>
 					<?php else : ?>
-						<input type="hidden" name="intent" value="arm" />
+						<input type="hidden" name="intent" value="on" />
 						<p>
-							<label for="mrmurphy-minutes"><?php esc_html_e( 'Arm the endpoints for', 'mrmurphy-restful-deploy' ); ?></label>
-							<select id="mrmurphy-minutes" name="minutes">
-								<?php foreach ( self::$windows as $minutes ) : ?>
-									<option value="<?php echo esc_attr( (string) $minutes ); ?>" <?php selected( 30, $minutes ); ?>>
-										<?php
-										echo esc_html(
-											0 === $minutes
-												? __( 'until I disarm them', 'mrmurphy-restful-deploy' )
-												/* translators: %d: minutes. */
-												: sprintf( _n( '%d minute', '%d minutes', $minutes, 'mrmurphy-restful-deploy' ), $minutes )
-										);
-										?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-							<?php submit_button( __( 'Arm endpoints', 'mrmurphy-restful-deploy' ), 'primary', 'submit', false ); ?>
+							<?php submit_button( __( 'Switch deployments on', 'mrmurphy-restful-deploy' ), 'primary', 'submit', false ); ?>
 						</p>
 						<p class="description" style="max-width:60em">
-							<?php esc_html_e( 'While armed, anyone with an administrator’s Application Password can install, activate, overwrite and delete plugins and themes on this site. A short window is usually all a deployment needs.', 'mrmurphy-restful-deploy' ); ?>
+							<?php esc_html_e( 'While on, anyone holding an administrator’s Application Password can install, activate, overwrite and delete plugins and themes on this site. Every action is written to the audit log below.', 'mrmurphy-restful-deploy' ); ?>
 						</p>
 					<?php endif; ?>
 				</form>
@@ -400,7 +349,7 @@ final class MRMurphy_Restful_Deploy_Admin {
 				?>
 			</p>
 			<p style="max-width:60em">
-				<?php esc_html_e( 'There is no route that arms these endpoints — that is deliberate, so a leaked Application Password cannot open the door for itself.', 'mrmurphy-restful-deploy' ); ?>
+				<?php esc_html_e( 'There is no route that switches these endpoints on or off — deliberate, so a leaked Application Password cannot close or reopen them behind your back.', 'mrmurphy-restful-deploy' ); ?>
 			</p>
 		</div>
 		<?php

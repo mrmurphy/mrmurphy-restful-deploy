@@ -8,65 +8,72 @@ distribution.
 ## Run
 
 ```bash
-# 1. copy the constant fixture into the TARGET SITE's mu-plugins.
-#    Phases 3 and 4 need it; 1 and 2 must run without it.
-#    Use an absolute path: the plugin directory is usually a symlink into a repo
-#    elsewhere, and from a symlinked cwd a relative ../../.. lands in the physical
-#    parent — /Users/you/projects/mu-plugins, which does not exist. The copy fails
-#    silently in a compound command, the constant is never defined, and phases 3
-#    and 4 then "fail" for reasons that have nothing to do with the plugin.
-SITE=/Users/you/Studio/yoursite/wp-content
-cp tests/mu-plugin-consts.php "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
-
 cd tests
 python3 make_fixtures.py                     # (re)build the fixture zips
 
-# 1. default state: the plugin is inert, nothing may install
-PKG_PHASE=disabled wp eval-file run-tests.php
+# These three need no fixture — a stock site with only the plugin installed.
+# 1. out of the box: deployments are ON, no setup required
+PKG_PHASE=default wp eval-file run-tests.php
 
-# 2. the settings-screen switch, with no constant defined
-PKG_PHASE=toggle wp eval-file run-tests.php
+# 2. the settings-screen switch: off closes the routes, on opens them again
+PKG_PHASE=off wp eval-file run-tests.php
 
-# 3. wp-config.php is the boss: a defined false beats an armed screen
+# 3. the full install / activate / overwrite / uninstall / security flow
+PKG_PHASE=enabled wp eval-file run-tests.php
+
+# The two wp-config.php phases need the constant fixture in mu-plugins first.
+# Use an absolute path: the plugin directory is usually a symlink into a repo
+# elsewhere, and from a symlinked cwd a relative ../../.. lands in the physical
+# parent — /Users/you/projects/mu-plugins, which does not exist. The copy then
+# fails silently in a compound command, the constant is never defined, and the
+# phases below abort or "fail" for reasons that have nothing to do with the code.
+SITE=/Users/you/Studio/yoursite/wp-content
+cp mu-plugin-consts.php "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
+
+# 4. the kill switch: a defined false beats the settings screen
 MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF=1 PKG_PHASE=forced_off wp eval-file run-tests.php
 
-# 4. enabled: full install / activate / validate / uninstall flow
-MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=enabled wp eval-file run-tests.php
+# 5. pinned on: a defined true ignores the settings screen
+MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=forced_on wp eval-file run-tests.php
 
 # then, when you are done:
 rm "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
 ```
 
-Expected, in that order: `5 passed, 0 failed`, `16 passed, 0 failed`, `5 passed, 0 failed`,
-`134 passed, 0 failed`.
+Expected, in that order: `6 passed, 0 failed`, `10 passed, 0 failed`, `134 passed, 0 failed`,
+`7 passed, 0 failed`, `5 passed, 0 failed`.
 
 Every phase clears its fixture plugin/theme and the plugin's options at the start, so runs are
 repeatable and order-independent; the `enabled` phase clears them again at the end and asserts
 the site was left as found (fixtures gone, active theme untouched, no options left), so a
-finished run does not leave debris on the site.
+finished run does not leave debris on the site — and the site ends up back in the default,
+deployments-on state.
 
 ## How the phase switch works
 
-The constant gate is exercised for real: `wp-content/mu-plugins` holds a
-throwaway drop-in that defines `MRMURPHY_RESTFUL_DEPLOY_ENABLED` only when
-`MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE` (true) or `MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF`
-(`false`) is set in the environment. Phase 1 and 2 run with no constant at all —
-which is what lets phase 2 test the settings-screen toggle, since that is the
-branch a missing constant takes. That drop-in
-(`zz-mrmurphy-restful-deploy-test-consts.php`) is a test fixture — delete it when you
-are done testing, it is not part of the plugin.
+`wp-config.php` constants cannot be defined twice, so the constant is injected for real:
+`wp-content/mu-plugins` holds a throwaway drop-in that defines
+`MRMURPHY_RESTFUL_DEPLOY_ENABLED` only when `MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE` (true) or
+`MRMURPHY_RESTFUL_DEPLOY_TEST_FORCE_OFF` (`false`) is set in the environment. With neither set
+it defines nothing — which is what phases 1–3 need, since "no constant" is the default branch.
+The drop-in (`zz-mrmurphy-restful-deploy-test-consts.php`) is a test fixture: delete it after
+testing, and never leave it on a site you care about, since anyone who can set an environment
+variable could then pin the master switch.
 
-Every phase opens with the options deleted (`…_log`, `…_refusals`, `…_enabled`,
-`…_until`, `…_expiry_logged`), so runs are repeatable and order-independent.
+Every phase opens with the options deleted (`…_log`, `…_refusals`, `…_enabled`) and the
+per-hour throttle counters wiped, so runs are repeatable and order-independent.
 
 ## What the suite covers
 
-- The master switch: routes exist but answer 403 while disabled.
-- The settings-screen switch (phase `toggle`, no constant defined): closed by default, arming
-  answers requests, the window expiry closes the endpoints on its own, disarm closes them, and
-  arm/disarm/expiry each land in the audit log exactly once.
-- `wp-config.php` precedence (phase `forced_off`): a defined `false` keeps the endpoints closed
-  even while the settings screen says they are armed.
+- The default state (phase `default`), which is the interesting one now: with no constant and
+  nothing stored, deployments are ON, `control_source()` says `default`, and `/inventory`
+  answers 200 with no setup at all.
+- The settings-screen switch (phase `off`): switching off closes the routes with
+  `mrmurphy_restful_deploy_disabled` and installs nothing, the change is audited, the routes
+  stay registered, and switching back on answers again.
+- `wp-config.php` precedence, both directions: `forced_off` proves a defined `false` beats a
+  screen that says on (the kill switch), `forced_on` proves a defined `true` beats a screen
+  that says off.
 - Gate order: master switch → login → HTTPS → application password → capability.
 - Capability denial (`rest_cannot_manage_plugins`) and the SSL gate.
 - Archive validation: flat zips, `../` traversal entries, non-package zips,

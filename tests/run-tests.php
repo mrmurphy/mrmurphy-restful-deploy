@@ -2,7 +2,7 @@
 /**
  * In-process end-to-end test for mrmurphy-restful-deploy.
  *
- * Run: PKG_PHASE=disabled|toggle|forced_off|enabled wp eval-file run-tests.php
+ * Run: PKG_PHASE=default|off|forced_off|forced_on|enabled wp eval-file run-tests.php
  *
  * Drives the real REST dispatch path (rest_do_request), the real capability
  * gates, the real upgrader and the real filesystem. The only thing relaxed is
@@ -51,6 +51,27 @@ function pkg_cleanup_fixtures() {
 
 		rmdir( $stale );
 	}
+
+	wp_clean_plugins_cache( false );
+}
+
+/**
+ * Put the site back the way the tests found it: no fixtures, no plugin options,
+ * no throttle counters, and therefore the default deployments-on state.
+ *
+ * Called at the start of every phase (so runs are order-independent) and at the
+ * end of every phase (so a phase that switched deployments off does not leave
+ * the site switched off).
+ */
+function pkg_tidy_up() {
+	pkg_cleanup_fixtures();
+
+	delete_option( 'mrmurphy_restful_deploy_log' );
+	delete_option( 'mrmurphy_restful_deploy_refusals' );
+	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
+
+	global $wpdb;
+	$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'mrmurphy_restful_deploy_ops_%'" );
 
 	wp_clean_plugins_cache( false );
 }
@@ -116,143 +137,153 @@ function payload( $file ) {
 	return base64_encode( file_get_contents( $file ) );
 }
 
-// Start from a clean slate so both phases are order-independent and repeatable.
+// Start from a clean slate so every phase is order-independent and repeatable.
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
-delete_option( 'mrmurphy_restful_deploy_log' );
-delete_option( 'mrmurphy_restful_deploy_refusals' );
-delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
-delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
-delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
 
-// The per-user hourly throttle counter is keyed by user and hour; clear them all
-// so a previous run's budget cannot make this one fail.
-global $wpdb;
-$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'mrmurphy_restful_deploy_ops_%'" );
-
-pkg_cleanup_fixtures();
+pkg_tidy_up();
 
 echo "=== phase: {$phase} ===\n";
 
-if ( 'disabled' === $phase ) {
-	$admins = get_users(
-		array(
-			'role'   => 'administrator',
-			'number' => 1,
-			'fields' => 'ID',
-		)
-	);
-	wp_set_current_user( $admins ? (int) $admins[0] : 1 );
-
-	echo '  admin user id: ' . get_current_user_id() . "\n";
-
-	$routes = rest_get_server()->get_routes();
-	ok( 'routes registered even while disabled', isset( $routes['/mrmurphy-restful-deploy/v1/plugins'] ) );
-
-	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
-	ok( 'disabled API answers 403', 403 === $resp->get_status(), 'status=' . $resp->get_status() );
-	ok( 'disabled API says why', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
-
-	$resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => payload( $dir . '/mrmurphy-test-package.zip' ) ) );
-	ok( 'disabled API refuses installs', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
-	ok( 'nothing was installed while disabled', ! is_dir( WP_PLUGIN_DIR . '/mrmurphy-test-package' ) );
-
-	tally();
-	return;
-}
-
-if ( 'toggle' === $phase ) {
-	$toggle_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
-	wp_set_current_user( $toggle_admins ? (int) $toggle_admins[0] : 1 );
+if ( 'default' === $phase ) {
+	$default_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $default_admins ? (int) $default_admins[0] : 1 );
 
 	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
 	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
 	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 100; } );
 
-	ok( 'no constant defined, so the settings screen decides', false === defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) );
-	ok( 'the toggle starts closed', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
-	ok( 'control source is the default', 'default' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+	ok( 'no MRMURPHY_RESTFUL_DEPLOY_ENABLED constant is defined', false === defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) );
+	ok( 'nothing has ever been switched, so the default applies', null === MRMurphy_Restful_Deploy_Plugin::stored_setting() );
+	ok( 'out of the box deployments are ON', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	ok( 'the state is the default, not a saved setting', 'default' === MRMurphy_Restful_Deploy_Plugin::control_source() );
 
 	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
-	ok( 'closed endpoints answer 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+	$data = $resp->get_data();
+	ok( 'a fresh install answers 200 with no setup at all', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+	ok( 'the inventory reports them as on', isset( $data['gates']['enabled'] ) && true === $data['gates']['enabled'] );
 
-	$armed_until = MRMurphy_Restful_Deploy_Plugin::arm( 30 );
-	ok( 'arming sets a window in the future', $armed_until > time() );
-	ok( 'armed => enabled', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
-	ok( 'control source is the toggle', 'toggle' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
+
+	tally();
+	return;
+}
+
+if ( 'off' === $phase ) {
+	$off_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $off_admins ? (int) $off_admins[0] : 1 );
+
+	echo '  admin user id: ' . get_current_user_id() . "\n";
+
+	// The gates a PHP process cannot satisfy. The master switch is checked first,
+	// so the switched-off assertions below still see the right error code.
+	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 100; } );
+
+	// The administrator switching deployments off on the settings screen.
+	MRMurphy_Restful_Deploy_Plugin::set_enabled( false );
+	ok( 'the screen can switch deployments off', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	ok( 'the screen is reported as the source', 'screen' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+
+	$logged = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
+	ok( 'switching off is audited', in_array( 'settings_disabled', $logged, true ), implode( ',', array_slice( $logged, 0, 5 ) ) );
+
+	$routes = rest_get_server()->get_routes();
+	ok( 'routes stay registered while switched off', isset( $routes['/mrmurphy-restful-deploy/v1/plugins'] ) );
 
 	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
-	ok( 'armed endpoints answer 200', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+	ok( 'switched-off API answers 403', 403 === $resp->get_status(), 'status=' . $resp->get_status() );
+	ok( 'switched-off API says why', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
 
-	$open_actions = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
-	ok( 'arming is audited', in_array( 'settings_arm', $open_actions, true ) );
+	$resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => payload( $dir . '/mrmurphy-test-package.zip' ) ) );
+	ok( 'switched-off API refuses installs', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+	ok( 'nothing was installed while switched off', ! is_dir( WP_PLUGIN_DIR . '/mrmurphy-test-package' ) );
 
-	// The window runs out: no cron, no request needed — the switch closes itself.
-	update_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL, time() - 10 );
-	ok( 'an expired window is closed', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	// And back on again, from the same screen.
+	MRMurphy_Restful_Deploy_Plugin::set_enabled( true );
+	ok( 'the screen can switch them back on', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
 
 	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
-	ok( 'expired window answers 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+	ok( 'switched back on, the API answers again', 403 !== $resp->get_status(), 'status=' . $resp->get_status() );
 
-	$expired_actions = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
-	ok( 'the expiry is audited once', 1 === count( array_keys( $expired_actions, 'settings_expired', true ) ), implode( ',', array_slice( $expired_actions, 0, 6 ) ) );
-
-	MRMurphy_Restful_Deploy_Plugin::disarm();
-	ok( 'disarm closes the endpoints', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
-
-	$closed_actions = wp_list_pluck( MRMurphy_Restful_Deploy_Log::all(), 'action' );
-	ok( 'disarming is audited', in_array( 'settings_disarm', $closed_actions, true ) );
-
-	// An allowlist, so the form cannot ask for an arbitrary window.
-	MRMurphy_Restful_Deploy_Plugin::arm( 0 );
-	ok( 'arm( 0 ) means until disarmed', 0 === MRMurphy_Restful_Deploy_Plugin::toggle_expires() );
-	ok( 'a zero window stays armed', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
-
-	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
-	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
-	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
-	delete_option( 'mrmurphy_restful_deploy_log' );
-	delete_option( 'mrmurphy_restful_deploy_refusals' );
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
 
 	tally();
 	return;
 }
 
 if ( 'forced_off' === $phase ) {
-	$off_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
-	wp_set_current_user( $off_admins ? (int) $off_admins[0] : 1 );
+	$kill_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $kill_admins ? (int) $kill_admins[0] : 1 );
 
 	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
 	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
 	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 100; } );
 
 	ok( 'the constant is defined as false', true === defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) && false === MRMURPHY_RESTFUL_DEPLOY_ENABLED );
-	ok( 'control source is the constant', 'constant-off' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+	ok( 'wp-config.php is reported as the source', 'constant-off' === MRMurphy_Restful_Deploy_Plugin::control_source() );
 
-	$armed_until = MRMurphy_Restful_Deploy_Plugin::arm( 30 );
-	ok( 'the screen can still record a window', $armed_until > time() );
-	ok( 'wp-config.php wins: still closed', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	// Stand in for an administrator who switches deployments back on in the UI:
+	// the stored setting says on, and the kill switch still wins.
+	MRMurphy_Restful_Deploy_Plugin::set_enabled( true );
+	ok( 'the screen can still store "on"', true === MRMurphy_Restful_Deploy_Plugin::setting_on() );
+	ok( 'the kill switch beats the screen', false === MRMurphy_Restful_Deploy_Plugin::enabled() );
 
 	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
-	ok( 'forced-off endpoints answer 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+	ok( 'a killed API answers 403', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
 
-	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
-	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
-	delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
-	delete_option( 'mrmurphy_restful_deploy_log' );
-	delete_option( 'mrmurphy_restful_deploy_refusals' );
+	$resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => payload( $dir . '/mrmurphy-test-package.zip' ) ) );
+	ok( 'a killed API refuses installs', 'mrmurphy_restful_deploy_disabled' === err_code( $resp ), err_code( $resp ) );
+	ok( 'nothing was installed while killed', ! is_dir( WP_PLUGIN_DIR . '/mrmurphy-test-package' ) );
+
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
 
 	tally();
 	return;
 }
 
-// Precondition: this phase is meaningless without the injected constant. Assert it
-// here, so a missing mu-plugin fixture fails once and says why instead of failing
-// a hundred times for reasons that look like plugin bugs.
-$const_ok = defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) ? ( false !== MRMURPHY_RESTFUL_DEPLOY_ENABLED ) : false;
-ok( 'precondition: MRMURPHY_RESTFUL_DEPLOY_ENABLED is defined true (was the mu-plugin fixture copied in?)', $const_ok );
+if ( 'forced_on' === $phase ) {
+	$pin_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $pin_admins ? (int) $pin_admins[0] : 1 );
 
-if ( ! $const_ok ) {
-	echo "Aborting the enabled phase: the constant is not defined, so nothing here would be testing the enabled path.\n";
+	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 100; } );
+
+	ok( 'the constant is defined as true', true === defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) && false !== MRMURPHY_RESTFUL_DEPLOY_ENABLED );
+
+	// Stand in for an administrator who switches deployments off in the UI.
+	MRMurphy_Restful_Deploy_Plugin::set_enabled( false );
+	ok( 'the screen can still store "off"', false === MRMurphy_Restful_Deploy_Plugin::setting_on() );
+	ok( 'the constant pins them on anyway', true === MRMurphy_Restful_Deploy_Plugin::enabled() );
+	ok( 'wp-config.php is reported as the source', 'constant-on' === MRMurphy_Restful_Deploy_Plugin::control_source() );
+
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'a pinned-on API answers 200', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
+
+	tally();
+	return;
+}
+
+// Precondition: the full suite runs in the state a fresh install is in — no
+// constant above it, deployments on by default, nothing stored. If this site has
+// the mu-plugin test fixture installed or a wp-config.php constant defined, the
+// run would be exercising something else, so fail once and say why instead of
+// failing a hundred times for reasons that look like plugin bugs.
+$prep_ok = ! defined( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED' ) && true === MRMurphy_Restful_Deploy_Plugin::enabled();
+ok( 'precondition: no MRMURPHY_RESTFUL_DEPLOY_ENABLED constant, and deployments are on by default', $prep_ok );
+
+if ( ! $prep_ok ) {
+	echo "Aborting the enabled phase: this site is not in the default state. The constant fixture is only for the forced_on/forced_off phases — see tests/README.md.\n";
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
+
 	tally();
 	return;
 }
@@ -659,11 +690,16 @@ if ( file_exists( $link_target . '/keep-me.txt' ) ) {
 $resp = req( '/mrmurphy-restful-deploy/v1/log', 'GET' );
 $log_data = $resp->get_data();
 ok( 'log reports refusal counters', isset( $log_data['refusals'] ) && is_array( $log_data['refusals'] ) );
-ok(
-	'refusals were counted',
-	! empty( $log_data['refusals'] ) && isset( $log_data['refusals'][ gmdate( 'YmdH' ) ]['_total'] ),
-	wp_json_encode( $log_data['refusals'] )
-);
+// Summed across buckets rather than read from the current hour: the suite takes
+// a minute or two, and a run that straddles an hour boundary would otherwise
+// fail here for no reason.
+$refusal_total = 0;
+foreach ( (array) $log_data['refusals'] as $bucket ) {
+	if ( is_array( $bucket ) && isset( $bucket['_total'] ) ) {
+		$refusal_total += (int) $bucket['_total'];
+	}
+}
+ok( 'refusals were counted', $refusal_total > 0, wp_json_encode( $log_data['refusals'] ) );
 
 $log_size_before = count( MRMurphy_Restful_Deploy_Log::all() );
 for ( $i = 0; $i < 25; $i++ ) {
@@ -677,15 +713,9 @@ ok( 'refused requests did not evict the audit log', count( MRMurphy_Restful_Depl
 
 // The pre-clean does this too, so a run never depends on the one before it.
 // Doing it again here means a finished run does not leave a fixture plugin and
-// theme sitting on the site, nor a pile of options behind them.
-pkg_cleanup_fixtures();
-delete_option( 'mrmurphy_restful_deploy_log' );
-delete_option( 'mrmurphy_restful_deploy_refusals' );
-delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_ENABLED );
-delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_UNTIL );
-delete_option( MRMurphy_Restful_Deploy_Plugin::OPTION_EXPIRY_LOGGED );
-$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'mrmurphy_restful_deploy_ops_%'" );
-wp_clean_plugins_cache( false );
+// theme on the site, nor a pile of options behind them — nor deployments
+// switched off, which is the state the phases above leave things in.
+pkg_tidy_up();
 
 ok( 'fixture plugin removed', ! is_dir( WP_PLUGIN_DIR . '/mrmurphy-test-package' ) && ! is_plugin_active( 'mrmurphy-test-package/mrmurphy-test-package.php' ) );
 ok( 'fixture theme removed', ! is_dir( trailingslashit( get_theme_root() ) . 'mrmurphy-test-theme' ) );
