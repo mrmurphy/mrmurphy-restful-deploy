@@ -2,7 +2,7 @@
 /**
  * In-process end-to-end test for mrmurphy-restful-deploy.
  *
- * Run: PKG_PHASE=default|off|forced_off|forced_on|enabled wp eval-file run-tests.php
+ * Run: PKG_PHASE=default|off|limits|forced_off|forced_on|enabled wp eval-file run-tests.php
  *
  * Drives the real REST dispatch path (rest_do_request), the real capability
  * gates, the real upgrader and the real filesystem. The only thing relaxed is
@@ -263,6 +263,66 @@ if ( 'forced_on' === $phase ) {
 
 	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
 	ok( 'a pinned-on API answers 200', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+
+	// Leave the site in the default, deployments-on state, whatever this phase did.
+	pkg_tidy_up();
+
+	tally();
+	return;
+}
+
+if ( 'limits' === $phase ) {
+	$limit_admins = get_users( array( 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ) );
+	wp_set_current_user( $limit_admins ? (int) $limit_admins[0] : 1 );
+
+	// The shipped default, asserted before any filter gets involved. A deploy the
+	// way the docs recommend — validate (free), then install+activate in one call
+	// (1) — costs a single operation, so 30 an hour is comfortable headroom and
+	// still stops a looping agent inside a couple of minutes.
+	ok( 'the default cap is 30 operations per user per hour', 30 === MRMurphy_Restful_Deploy_Plugin::max_operations_per_hour(), (string) MRMurphy_Restful_Deploy_Plugin::max_operations_per_hour() );
+
+	add_filter( 'mrmurphy_restful_deploy_ssl_required', '__return_false' );
+	add_filter( 'mrmurphy_restful_deploy_app_password_required', '__return_false' );
+
+	// A small cap, so the behaviour is observable in a handful of requests.
+	add_filter( 'mrmurphy_restful_deploy_max_operations_per_hour', static function () { return 3; } );
+
+	$key   = 'mrmurphy_restful_deploy_ops_' . get_current_user_id() . '_' . gmdate( 'YmdH' );
+	$zip   = payload( $dir . '/mrmurphy-test-package.zip' );
+	$count = static function () use ( $key ) {
+		// Read with SQL, the way enforce_rate_limit() writes it: the counter is
+		// bumped by a raw statement, so get_option() would hand back the cached
+		// miss it saw the first time this option name was asked for.
+		global $wpdb;
+
+		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $key ) );
+	};
+
+	ok( 'the counter is keyed per user and per hour', 1 === preg_match( '/^mrmurphy_restful_deploy_ops_\d+_\d{10}$/', $key ), $key );
+	ok( 'the counter starts empty', 0 === $count() );
+
+	// Validation and reads are free: they must not spend the budget.
+	$resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => $zip, 'dry_run' => true ) );
+	ok( 'dry_run answers 200', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+	ok( 'dry_run spends no budget', 0 === $count(), 'count=' . $count() );
+
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'reads spend no budget', 200 === $resp->get_status() && 0 === $count(), 'status=' . $resp->get_status() . ' count=' . $count() );
+
+	// A real write costs one, whatever it goes on to do with it.
+	req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => $zip ) );
+	ok( 'an install costs exactly one operation', 1 === $count(), 'count=' . $count() );
+
+	// Three allowed, the fourth refused — and the refusal names the cap.
+	req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => $zip ) );
+	req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => $zip ) );
+	$resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => $zip ) );
+	ok( 'past the cap answers 429', 'mrmurphy_restful_deploy_rate_limited' === err_code( $resp ), err_code( $resp ) );
+	ok( 'the refusal quotes the cap', false !== strpos( (string) $resp->as_error()->get_error_message(), '3' ), (string) $resp->as_error()->get_error_message() );
+
+	// Reads still work with the budget spent, so an agent can always look around.
+	$resp = req( '/mrmurphy-restful-deploy/v1/inventory', 'GET' );
+	ok( 'reads still answer 200 at the cap', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
 
 	// Leave the site in the default, deployments-on state, whatever this phase did.
 	pkg_tidy_up();

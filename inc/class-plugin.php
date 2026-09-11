@@ -268,10 +268,16 @@ final class MRMurphy_Restful_Deploy_Plugin {
 	/**
 	 * Maximum install/activate operations per user per hour.
 	 *
+	 * A brake on a runaway loop, not a security boundary: the caller already
+	 * holds a credential that can write code to disk. It is set high enough that
+	 * deliberate work never notices it — a deploy that validates (free), installs
+	 * and activates in one call costs 1 — and low enough that a broken agent
+	 * looping on installs stops within a couple of minutes.
+	 *
 	 * @return int
 	 */
 	public static function max_operations_per_hour() {
-		$default = 12;
+		$default = 30;
 		$max     = defined( 'MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR' ) ? (int) MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR : $default;
 
 		/** This filter is documented above. */

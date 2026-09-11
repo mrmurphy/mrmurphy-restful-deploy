@@ -18,7 +18,10 @@ PKG_PHASE=default wp eval-file run-tests.php
 # 2. the settings-screen switch: off closes the routes, on opens them again
 PKG_PHASE=off wp eval-file run-tests.php
 
-# 3. the full install / activate / overwrite / uninstall / security flow
+# 3. the throttle: what costs budget, what does not, and the 429 at the cap
+PKG_PHASE=limits wp eval-file run-tests.php
+
+# 4. the full install / activate / overwrite / uninstall / security flow
 PKG_PHASE=enabled wp eval-file run-tests.php
 
 # The two wp-config.php phases need the constant fixture in mu-plugins first.
@@ -40,8 +43,8 @@ MRMURPHY_RESTFUL_DEPLOY_TEST_ENABLE=1 PKG_PHASE=forced_on wp eval-file run-tests
 rm "$SITE/mu-plugins/zz-mrmurphy-restful-deploy-test-consts.php"
 ```
 
-Expected, in that order: `6 passed, 0 failed`, `10 passed, 0 failed`, `134 passed, 0 failed`,
-`7 passed, 0 failed`, `5 passed, 0 failed`.
+Expected, in that order: `6 passed, 0 failed`, `10 passed, 0 failed`, `10 passed, 0 failed`,
+`134 passed, 0 failed`, `7 passed, 0 failed`, `5 passed, 0 failed`.
 
 Every phase clears its fixture plugin/theme and the plugin's options at the start, so runs are
 repeatable and order-independent; the `enabled` phase clears them again at the end and asserts
@@ -74,6 +77,11 @@ per-hour throttle counters wiped, so runs are repeatable and order-independent.
 - `wp-config.php` precedence, both directions: `forced_off` proves a defined `false` beats a
   screen that says on (the kill switch), `forced_on` proves a defined `true` beats a screen
   that says off.
+- The throttle (phase `limits`): the shipped default is 30 operations per user per hour, the
+  counter is keyed per user and hour, `dry_run` and reads spend nothing, one install costs
+  exactly one, and the request past the cap gets `429 mrmurphy_restful_deploy_rate_limited`
+  quoting the cap — while reads still answer. The counter is read with SQL, because the
+  throttle writes it with SQL and `get_option()` would return a cached miss.
 - Gate order: master switch → login → HTTPS → application password → capability.
 - Capability denial (`rest_cannot_manage_plugins`) and the SSL gate.
 - Archive validation: flat zips, `../` traversal entries, non-package zips,

@@ -19,10 +19,13 @@ Start    : GET /inventory — it returns the installed plugins/themes and the ac
            Do this first, every session, before proposing any change.
 
 How to work:
-- Validate every package with "dry_run": true before installing it.
+- Validate every package with "dry_run": true before installing it. Dry runs are free.
 - One mutating request at a time. Do not parallelise installs.
 - After each mutating request, confirm with GET /inventory or GET /log.
 - Pass "activate": true only when the change should go live immediately.
+- You have 30 mutating operations per hour (repeatable ops: install, activate,
+  deactivate, uninstall — one each). Reads and dry runs spend nothing, so keep
+  checking your work. gates.max_operations_per_hour in /inventory says the limit.
 - Never overwrite or uninstall anything without the human asking for it.
 - If a request fails, read the error code and follow the recovery table below
   instead of retrying blindly.
@@ -103,8 +106,9 @@ AUTH='user:abcd EFGH 1234 ijkl MNOP 5678'
 curl -sS -u "$AUTH" "$SITE/inventory" | python3 -m json.tool
 ```
 
-Read `gates.enabled` (are deployments on?), `gates.controlled_by`, `plugins[]` (`plugin`,
-`version`, `status`, `update_available`) and `themes[]`.
+Read `gates.enabled` (are deployments on?), `gates.controlled_by`,
+`gates.max_operations_per_hour` (your budget), `plugins[]` (`plugin`, `version`, `status`,
+`update_available`) and `themes[]`.
 
 **2. Validate a package without touching the site.**
 
@@ -184,7 +188,7 @@ curl -sS -u "$AUTH" "$SITE/log?limit=20" | python3 -m json.tool
 | `mrmurphy_restful_deploy_not_authenticated` | 401 | Credentials missing or wrong. Ask for a fresh application password. |
 | `mrmurphy_restful_deploy_requires_application_password` | 403 | You authenticated with a browser session, not Basic auth. |
 | `mrmurphy_restful_deploy_requires_ssl` | 403 | Use `https://`. |
-| `mrmurphy_restful_deploy_rate_limited` | 429 | Per-user hourly budget spent. Wait; do not retry in a loop. |
+| `mrmurphy_restful_deploy_rate_limited` | 429 | Hourly budget spent (30 mutating operations per user per hour by default; reads and dry runs are free). Wait, or ask the human to raise the cap — do not retry in a loop. |
 | `rest_cannot_manage_plugins` / `_themes` | 403 | This WordPress user cannot install/delete these. Ask for an administrator's app password. |
 | `folder_exists` | 409 | Already installed. Use `overwrite: true` (if the site allows it). |
 | `mrmurphy_restful_deploy_overwrite_disabled` | 403 | Overwriting is off site-wide. Ask the human; or uninstall then install. |
@@ -204,8 +208,9 @@ curl -sS -u "$AUTH" "$SITE/log?limit=20" | python3 -m json.tool
    installed, and what will be overwritten.
 2. **`dry_run` before install.** Cheap, and it catches a wrong archive before it lands.
 3. **Never overwrite or uninstall unasked.** Both are destructive; the second may delete data.
-4. **Sequential mutating calls.** The throttle is per user per hour, and concurrent writes
-   fight each other.
+4. **Sequential mutating calls.** The throttle is per user per hour (30 by default) and
+   concurrent writes fight each other. Dry runs and reads are free, so a validate →
+   install+activate → verify loop costs 1 operation per deploy.
 5. **Verify, then report.** After a mutation, confirm with `/inventory`, and quote the audit
    entry it produced (`audit.time`, `audit.action`, `audit.target`).
 6. **Stop and ask** when you meet `_disabled`, `overwrite_disabled`, or any request to delete

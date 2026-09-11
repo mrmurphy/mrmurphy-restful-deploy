@@ -601,12 +601,6 @@ final class MRMurphy_Restful_Deploy_REST {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function create_plugin( $request ) {
-		$rate = $this->enforce_rate_limit();
-
-		if ( is_wp_error( $rate ) ) {
-			return $this->fail( 'install_plugin', '', $rate );
-		}
-
 		$started   = microtime( true );
 		$installer = new MRMurphy_Restful_Deploy_Installer();
 
@@ -634,6 +628,17 @@ final class MRMurphy_Restful_Deploy_REST {
 						'installed' => false,
 					)
 				);
+			}
+
+			// Charged here rather than on entry, because this is the point of no
+			// return: a dry run has validated the archive and returns without
+			// writing anything, and charging for it would tax exactly the
+			// careful behaviour the docs tell agents to use. Validation work is
+			// bounded by the size caps instead; the throttle bounds writes.
+			$rate = $this->enforce_rate_limit();
+
+			if ( is_wp_error( $rate ) ) {
+				return $this->fail( 'install_plugin', $info['name'], $rate );
 			}
 
 			$overwrite = $this->overwrite_flag( $request );
@@ -696,12 +701,6 @@ final class MRMurphy_Restful_Deploy_REST {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function create_theme( $request ) {
-		$rate = $this->enforce_rate_limit();
-
-		if ( is_wp_error( $rate ) ) {
-			return $this->fail( 'install_theme', '', $rate );
-		}
-
 		$started   = microtime( true );
 		$installer = new MRMurphy_Restful_Deploy_Installer();
 
@@ -729,6 +728,14 @@ final class MRMurphy_Restful_Deploy_REST {
 						'installed' => false,
 					)
 				);
+			}
+
+			// See create_plugin(): a dry run is free, and the throttle only
+			// charges requests that are about to write to the filesystem.
+			$rate = $this->enforce_rate_limit();
+
+			if ( is_wp_error( $rate ) ) {
+				return $this->fail( 'install_theme', $info['name'], $rate );
 			}
 
 			$overwrite = $this->overwrite_flag( $request );

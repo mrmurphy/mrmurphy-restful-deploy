@@ -198,6 +198,39 @@ curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" \
   https://mrmurphy.dev/wp-json/wp/v2/plugins
 ```
 
+## Rate limits
+
+**30 mutating operations per user per hour** (UTC), counted per user.
+
+| Request | Cost |
+| --- | --- |
+| `GET /inventory`, `GET /log` | 0 — reads are never throttled |
+| `POST /plugins` or `/themes` with `"dry_run": true` | 0 — validation writes nothing |
+| `POST /plugins` or `/themes` — an install, with or without `activate` | 1 |
+| `POST /plugins/activate`, `/plugins/deactivate`, `/themes/activate` | 1 each |
+| `DELETE /plugins`, `DELETE /themes` | 1 each |
+
+A deploy done the way these docs recommend — dry-run, then install+activate in one call, then
+read `/inventory` to confirm — costs **one operation**, so the default is six times what an
+agent needing five deploys an hour would spend. Raise it with
+`define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR', 120 );` or the
+`mrmurphy_restful_deploy_max_operations_per_hour` filter; `GET /inventory` reports the live
+value under `gates.max_operations_per_hour`, and `gates.rate_limit_mode` says whether the
+atomic counter or the best-effort fallback is in force.
+
+The counter is bumped by one atomic statement *before* the write, so parallel requests cannot
+slip past the cap, and the request that takes it over is refused — its slot is spent, which is
+the safe direction. Refused and failed attempts cost the same as successful ones, because this
+is a brake on a looping agent, not a meter on success. Over the cap you get
+`429 mrmurphy_restful_deploy_rate_limited`.
+
+Reads and dry runs are deliberately free: charging for validation would tax exactly the
+careful behaviour the docs ask agents for. The trade is that validation work is bounded by the
+size caps rather than by the throttle — an authenticated admin can decompress up to 32 MB per
+request (`MRMURPHY_RESTFUL_DEPLOY_MAX_BYTES`) as often as they like. That caller can already
+write code to disk, so this is not the boundary that matters; if it is the boundary you care
+about, lower `MRMURPHY_RESTFUL_DEPLOY_MAX_BYTES` and keep the throttle for writes.
+
 ## Security model and its limits
 
 This API is remote code execution for a correctly authenticated, correctly privileged
@@ -308,7 +341,7 @@ define( 'MRMURPHY_RESTFUL_DEPLOY_REQUIRE_SSL', true );              // default t
 define( 'MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE', true );          // default FALSE: opt in
 define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_BYTES', 32 * 1024 * 1024 );    // default 32 MB
 define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_UNCOMPRESSED_BYTES', 512 * 1024 * 1024 );
-define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR', 12 );    // default 12
+define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR', 30 );    // default 30
 ```
 
 `MRMURPHY_RESTFUL_DEPLOY_ENABLED` is the exception to the "defined and not `false`" rule that
@@ -358,6 +391,7 @@ python3 tests/make_fixtures.py                                    # rebuild fixt
 
 PKG_PHASE=default     wp eval-file tests/run-tests.php            # 6 — out of the box it is ON
 PKG_PHASE=off         wp eval-file tests/run-tests.php            # 10 — the off switch, both ways
+PKG_PHASE=limits      wp eval-file tests/run-tests.php            # 10 — the throttle, measured
 PKG_PHASE=forced_off  wp eval-file tests/run-tests.php            # 7 — the kill switch wins
 PKG_PHASE=forced_on   wp eval-file tests/run-tests.php            # 5 — the constant can pin it on
 PKG_PHASE=enabled     wp eval-file tests/run-tests.php            # 134 — the whole API
