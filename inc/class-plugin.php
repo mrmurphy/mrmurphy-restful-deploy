@@ -287,16 +287,25 @@ final class MRMurphy_Restful_Deploy_Plugin {
 	/**
 	 * Whether an existing plugin/theme directory may be overwritten.
 	 *
-	 * Opt-in: the constant has to be defined (as anything other than the
-	 * boolean false). Overwriting replaces running code and, on a directory
-	 * that is a symlink, would write outside wp-content — so the default is
-	 * "no". Even when allowed, each request still has to pass
-	 * "overwrite": true.
+	 * Overwriting an existing directory is how a package gets *upgraded*, so it is
+	 * on by default — `overwrite` and "upgrade" are the same operation, and making
+	 * it opt-in turned deploying into two different products depending on whether
+	 * the package was already there.
+	 *
+	 * The constant follows the shape of the master switch: it is the off switch,
+	 * not the on switch. A site that wants overwriting forbidden defines
+	 * MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE as false and gets a hard refusal.
+	 *
+	 * Two guards remain, and they are the ones that matter:
+	 *   - each request has to send "overwrite": true, so a caller cannot clobber a
+	 *     package it did not know was already installed;
+	 *   - replacing a package that is currently running also needs "activate":
+	 *     true, the acknowledgement that the new code goes live immediately.
 	 *
 	 * @return bool
 	 */
 	public static function overwrite_allowed() {
-		$allowed = defined( 'MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE' ) && ( false !== MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE );
+		$allowed = ! defined( 'MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE' ) || ( false !== MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE );
 
 		/** This filter is documented above. */
 		return (bool) apply_filters( 'mrmurphy_restful_deploy_overwrite_allowed', $allowed );

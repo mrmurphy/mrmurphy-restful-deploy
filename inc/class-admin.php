@@ -392,8 +392,8 @@ final class MRMurphy_Restful_Deploy_Admin {
 						<td>
 							<?php
 							echo $gates['overwrite_allowed']
-								? esc_html__( 'Allowed (MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE is set)', 'mrmurphy-restful-deploy' )
-								: esc_html__( 'Refused — overwriting needs MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE', 'mrmurphy-restful-deploy' );
+								? esc_html__( 'Allowed — replacing running code also needs “activate”', 'mrmurphy-restful-deploy' )
+								: esc_html__( 'Refused — MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE is defined as false', 'mrmurphy-restful-deploy' );
 							?>
 						</td>
 					</tr>

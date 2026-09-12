@@ -217,7 +217,7 @@ final class MRMurphy_Restful_Deploy_REST {
 				'required'    => false,
 				'type'        => 'boolean',
 				'default'     => false,
-				'description' => __( 'Replace an existing directory of the same name. Off by default, and additionally requires MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE in wp-config.php; refused for an active package unless activate is also true.', 'mrmurphy-restful-deploy' ),
+				'description' => __( 'Replace (upgrade) an existing directory of the same name. Required whenever the package is already installed; refused only if the site has switched overwriting off, and refused for an active package unless activate is also true.', 'mrmurphy-restful-deploy' ),
 			),
 			'dry_run'    => array(
 				'required'    => false,
@@ -1023,7 +1023,7 @@ final class MRMurphy_Restful_Deploy_REST {
 		if ( ! MRMurphy_Restful_Deploy_Plugin::overwrite_allowed() ) {
 			return new WP_Error(
 				'mrmurphy_restful_deploy_overwrite_disabled',
-				'Overwriting installed packages is disabled by default. Define MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE as true in wp-config.php to allow it.',
+				'Overwriting is switched off on this site: MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE is defined as false in wp-config.php. Remove that line, or uninstall the package and install it again instead.',
 				array( 'status' => 403 )
 			);
 		}

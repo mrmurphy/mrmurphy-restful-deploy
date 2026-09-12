@@ -3,7 +3,7 @@
  * Plugin Name:       MrMurphy Restful Deploy
  * Plugin URI:        https://github.com/mrmurphy/mrmurphy-restful-deploy
  * Description:       Deploy plugins and themes over the REST API — upload, install, activate and uninstall ZIP packages without SFTP or SSH. Admin-only, authenticated with an application password, with an audit log. Built for scripts and AI agents.
- * Version:           1.4.0
+ * Version:           1.5.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Murphy Randle
@@ -17,7 +17,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'MRMURPHY_RESTFUL_DEPLOY_VERSION', '1.4.0' );
+define( 'MRMURPHY_RESTFUL_DEPLOY_VERSION', '1.5.0' );
 define( 'MRMURPHY_RESTFUL_DEPLOY_FILE', __FILE__ );
 define( 'MRMURPHY_RESTFUL_DEPLOY_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MRMURPHY_RESTFUL_DEPLOY_NAMESPACE', 'mrmurphy-restful-deploy/v1' );

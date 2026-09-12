@@ -24,6 +24,15 @@ if [ -z "$version" ]; then
 	exit 1
 fi
 
+# The archive comes from HEAD, but the version above comes from the working tree.
+# With uncommitted changes those disagree: you get a ZIP whose name promises one
+# version and whose contents are the last commit. Refuse instead of mislabelling.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+	echo "Working tree has uncommitted changes, and git archive builds HEAD —" >&2
+	echo "the archive would not be the code you are looking at. Commit first." >&2
+	exit 1
+fi
+
 out="dist/${slug}-${version}.zip"
 
 mkdir -p dist
@@ -38,6 +47,14 @@ git archive --format=zip --prefix="${slug}/" -o "$out" HEAD -- . \
 	':(exclude)tests' \
 	':(exclude)build-zip.sh' \
 	':(exclude).gitignore'
+
+# Belt and braces: the version inside the archive must be the one in its name.
+archived_version=$(unzip -p "$out" "${slug}/${slug}.php" | sed -n 's/^ \* Version: *\(.*\)$/\1/p' | head -1)
+if [ "$archived_version" != "$version" ]; then
+	echo "Archive holds version ${archived_version:-unknown} but is named ${version}. Refusing." >&2
+	rm -f "$out"
+	exit 1
+fi
 
 echo "Built ${out} (version ${version})"
 echo

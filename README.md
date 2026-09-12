@@ -108,7 +108,7 @@ exists in core as `DELETE /wp/v2/plugins/<plugin>` (with the same active-plugin 
 | `file` | multipart | — | Alternative to `zip_base64`: `-F file=@my-plugin.zip`. |
 | `filename` | string | — | Cosmetic; used in messages and the temp file name. |
 | `activate` | bool | `false` | Activate after installing. Also the confirmation for replacing running code. |
-| `overwrite` | bool | `false` | Replace an existing directory. Opt-in twice: also needs `MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE` in wp-config.php. |
+| `overwrite` | bool | `false` | Replace — i.e. upgrade — an existing directory of the same name. Required whenever the package is already installed; a site can forbid overwriting entirely. |
 | `dry_run` | bool | `false` | Validate and describe the archive; install nothing. |
 | `network_wide` | bool | `false` | Multisite: activate for the whole network. |
 
@@ -250,10 +250,11 @@ can still go wrong.
   trailing dot or space (Win32 strips those), no path separators, and no Windows reserved
   device names. The same validation is applied to archive top-level folders, plugin
   directories and theme stylesheets.
-- Overwriting is **opt-in twice**: `MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE` has to be defined
-  in `wp-config.php`, and each request still has to send `overwrite: true`. Overwriting a
-  plugin or theme that is currently *running* additionally requires `activate: true`, so
-  replacing live code is never a silent side effect.
+- Overwriting an existing package **is** the upgrade path and is on by default, but each
+  request still has to send `overwrite: true` — a caller cannot clobber a package it did not
+  know was already there. Replacing a plugin or theme that is currently *running* additionally
+  requires `activate: true`, so replacing live code is never a silent side effect. A site that
+  wants overwriting forbidden defines `MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE` as `false`.
 - The API refuses to overwrite or delete itself, comparing resolved paths so a symlink
   alias cannot slip past.
 - A failed install sweeps the extracted working directory out of `wp-content/upgrade/`,
@@ -313,8 +314,8 @@ can still go wrong.
 | `mrmurphy_restful_deploy_wrong_package_type` | 400 | Theme sent to `/plugins` or vice versa. |
 | `mrmurphy_restful_deploy_package_too_large` | 413 | Above the size cap. |
 | `mrmurphy_restful_deploy_compression_ratio` | 413 | Looks like a decompression bomb. |
-| `folder_exists` | 409 | Already installed; pass `overwrite: true` (and enable overwriting). |
-| `mrmurphy_restful_deploy_overwrite_disabled` | 403 | Overwriting is not enabled in wp-config.php. |
+| `folder_exists` | 409 | Already installed; pass `overwrite: true` to upgrade it in place. |
+| `mrmurphy_restful_deploy_overwrite_disabled` | 403 | This site has overwriting switched off (the constant is defined as false). Uninstall and reinstall, or ask the human. |
 | `mrmurphy_restful_deploy_overwrite_active_plugin` / `_active_theme` | 409 | Target is running; pass `activate: true` to confirm. |
 | `mrmurphy_restful_deploy_destination_is_symlink` | 409 | Target is a symlink; refused so nothing outside wp-content is touched. |
 | `mrmurphy_restful_deploy_destination_outside_root` | 409 | Target does not resolve to a direct child of the package root. |
@@ -331,14 +332,14 @@ can still go wrong.
 
 ## Configuration constants
 
-All optional. **Every gate other than the master switch defaults to closed**, and the plugin
-deploys out of the box.
+All optional. The security gates (app password, SSL) default to enforced, and the plugin
+deploys — including upgrades — out of the box.
 
 ```php
 define( 'MRMURPHY_RESTFUL_DEPLOY_ENABLED', false );                 // master switch, default ON
 define( 'MRMURPHY_RESTFUL_DEPLOY_REQUIRE_APP_PASSWORD', true );     // default true
 define( 'MRMURPHY_RESTFUL_DEPLOY_REQUIRE_SSL', true );              // default true
-define( 'MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE', true );          // default FALSE: opt in
+define( 'MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE', false );         // default ON: this forbids overwriting
 define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_BYTES', 32 * 1024 * 1024 );    // default 32 MB
 define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_UNCOMPRESSED_BYTES', 512 * 1024 * 1024 );
 define( 'MRMURPHY_RESTFUL_DEPLOY_MAX_OPERATIONS_PER_HOUR', 30 );    // default 30

@@ -148,8 +148,8 @@ Activating a theme switches the live site. Do it only when asked.
 curl -sS -u "$AUTH" -F file=@my-plugin.zip -F overwrite=1 -F activate=1 "$SITE/plugins"
 ```
 
-`overwrite: true` is refused unless the human enabled overwriting
-(`MRMURPHY_RESTFUL_DEPLOY_ALLOW_OVERWRITE`), and an overwrite of a package that is currently
+`overwrite: true` is how an upgrade happens, and it works out of the box. It is refused only
+if the site has switched overwriting off, and an overwrite of a package that is currently
 *running* is refused unless `activate: true` is also sent — that flag is the acknowledgement
 that the replacement code goes live immediately.
 

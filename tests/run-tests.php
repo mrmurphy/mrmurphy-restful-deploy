@@ -558,13 +558,15 @@ $resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' 
 ok( 'existing plugin refused with 409', 409 === $resp->get_status(), 'status=' . $resp->get_status() . ' code=' . err_code( $resp ) );
 ok( 'existing plugin error says the folder exists', 'folder_exists' === err_code( $resp ), err_code( $resp ) );
 
+// Overwriting an existing package IS the upgrade path, so it works with no constant.
 $resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => payload( $dir . '/mrmurphy-test-package.zip' ), 'overwrite' => true ) );
-ok( 'overwrite refused by default (fails closed)', 'mrmurphy_restful_deploy_overwrite_disabled' === err_code( $resp ), err_code( $resp ) );
+ok( 'overwrite works with no constant (upgrading is not opt-in)', 200 === $resp->get_status(), 'status=' . $resp->get_status() . ' code=' . err_code( $resp ) );
 
-// An operator opting in to overwrites.
-add_filter( 'mrmurphy_restful_deploy_overwrite_allowed', '__return_true' );
+// A site that wants it forbidden says so, and the refusal explains itself.
+add_filter( 'mrmurphy_restful_deploy_overwrite_allowed', '__return_false' );
 $resp = req( '/mrmurphy-restful-deploy/v1/plugins', 'POST', array( 'zip_base64' => payload( $dir . '/mrmurphy-test-package.zip' ), 'overwrite' => true ) );
-ok( 'overwrite=true allowed when the operator opts in', 200 === $resp->get_status(), 'status=' . $resp->get_status() );
+ok( 'overwrite refused when the site switches it off', 'mrmurphy_restful_deploy_overwrite_disabled' === err_code( $resp ), err_code( $resp ) );
+remove_filter( 'mrmurphy_restful_deploy_overwrite_allowed', '__return_false' );
 
 $resp = req( '/mrmurphy-restful-deploy/v1/plugins/activate', 'POST', array( 'plugin' => 'mrmurphy-test-package/mrmurphy-test-package.php' ) );
 $data = $resp->get_data();
