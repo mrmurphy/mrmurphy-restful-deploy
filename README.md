@@ -66,6 +66,11 @@ for when trust is exactly what you have lost.
 `Authorization: Basic base64(user:application-password)` — WordPress turns this into the
 normal user context, so **capabilities still apply**:
 
+Keep the credentials out of the command line: put them once in `~/.netrc` as
+`machine <DOMAIN>` / `login <USER>` / `password <APPLICATION PASSWORD>`, `chmod 600`
+the file, and call curl with `--netrc-file ~/.netrc` (or `--netrc`). Never put the
+password in a `-u` argument, a shell variable or a script.
+
 - `/plugins*` needs `install_plugins` **and** `activate_plugins` (`delete_plugins` for
   `DELETE`).
 - `/themes*` needs `install_themes` **and** `switch_themes` (`delete_themes` for `DELETE`).
@@ -147,22 +152,22 @@ recoverable from the ZIP alone.
 SITE=https://mrmurphy.dev/wp-json/mrmurphy-restful-deploy/v1
 
 # Base64 JSON body
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" \
+curl -sS --netrc-file ~/.netrc \
   -H 'Content-Type: application/json' \
   -d "$(python3 -c 'import base64,json,sys;print(json.dumps({"zip_base64":base64.b64encode(open("mrmurphy-theme.zip","rb").read()).decode(),"activate":True}))')" \
   "$SITE/themes"
 
 # multipart upload, plugin, dry run first
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" -F file=@my-plugin.zip -F dry_run=1 "$SITE/plugins"
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" -F file=@my-plugin.zip -F activate=1 "$SITE/plugins"
+curl -sS --netrc-file ~/.netrc -F file=@my-plugin.zip -F dry_run=1 "$SITE/plugins"
+curl -sS --netrc-file ~/.netrc -F file=@my-plugin.zip -F activate=1 "$SITE/plugins"
 
 # Uninstall (deactivating first)
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" -X DELETE \
+curl -sS --netrc-file ~/.netrc -X DELETE \
   "$SITE/plugins?plugin=my-plugin%2Fmy-plugin.php&deactivate=1"
 
 # Inventory and audit log
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" "$SITE/inventory"
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" "$SITE/log?limit=20"
+curl -sS --netrc-file ~/.netrc "$SITE/inventory"
+curl -sS --netrc-file ~/.netrc "$SITE/log?limit=20"
 ```
 
 Successful install:
@@ -192,7 +197,7 @@ Successful install:
 Installing from the wordpress.org directory is already core — no need to build the ZIP:
 
 ```bash
-curl -sS -u "murphy:xxxx xxxx xxxx xxxx xxxx xxxx" \
+curl -sS --netrc-file ~/.netrc \
   -H 'Content-Type: application/json' \
   -d '{"slug":"akismet","status":"active"}' \
   https://mrmurphy.dev/wp-json/wp/v2/plugins
@@ -376,8 +381,10 @@ the capped log and evict real evidence. They are counted per hour instead and re
 buttons — no trip to the repository:
 
 - **Start here: paste this into your agent** — the short block, with this site's base URL and
-  the reading user's username already filled in. Your Application Password is the one thing it
-  deliberately leaves blank.
+  the reading user's username already filled in. It points the agent at a gitignored
+  `~/.netrc` file rather than an inline password: the agent creates the file with an
+  `APP_TOKEN_HERE_PLEASE`-style placeholder if it is missing, fixes its permissions,
+  and asks you to paste the Application Password in yourself.
 - **The full brief** — the same text as `AGENT-INSTRUCTIONS.md`: every route, copy-paste curl
   recipes, ZIP rules, a table of error codes with what to do about each, the house rules
   (dry-run first, never overwrite unasked, one mutation at a time, stop and ask when

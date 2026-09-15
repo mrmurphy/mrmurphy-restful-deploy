@@ -233,7 +233,8 @@ final class MRMurphy_Restful_Deploy_Admin {
 			'"MrMurphy Restful Deploy" REST API, without SFTP or SSH.',
 			'',
 			'Base URL : ' . rest_url( MRMURPHY_RESTFUL_DEPLOY_NAMESPACE ),
-			'Auth     : HTTP Basic, with an administrator\'s Application Password',
+			'Auth     : HTTP Basic, with an administrator\'s Application Password, read from ~/',
+			'           .netrc — never on the command line. See the full brief for setup.',
 			'Start    : GET /inventory — it reports the installed packages and the gates.',
 			'',
 			'Routes:',
@@ -511,7 +512,7 @@ final class MRMurphy_Restful_Deploy_Admin {
 				<?php
 				printf(
 					/* translators: %s: link to the Application Passwords screen. */
-					esc_html__( 'The base URL and your username are filled in for you. Put your own Application Password where the placeholder is: create or revoke one under %s. It is the only secret in the brief, and this page never stores or shows one.', 'mrmurphy-restful-deploy' ),
+					esc_html__( 'The base URL and your username are filled in for you. The brief tells the agent to read the Application Password from a gitignored ~/.netrc file: if you do not have one yet, the agent will create it with a placeholder (APP_TOKEN_HERE_PLEASE), chmod it to 600, and ask you to open the file and paste the password in yourself. Create or revoke passwords under %s. It is the only secret in the workflow, and this page never stores, shows or asks for one.', 'mrmurphy-restful-deploy' ),
 					'<a href="' . esc_url( admin_url( 'profile.php#application-passwords-section' ) ) . '">' . esc_html__( 'Users → Profile → Application Passwords', 'mrmurphy-restful-deploy' ) . '</a>'
 				);
 				?>
